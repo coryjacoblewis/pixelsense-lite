@@ -12,6 +12,8 @@
 3. **Training & Quantization ([`train_quantize.py`](./train_quantize.py))**: Trains a compact 2D CNN and exports `fp32`, `fp16`, and full-integer `int8` `.tflite` flatbuffers.
 4. **Release Gate ([`release_gate.py`](./release_gate.py))**: Verifies subgraph INT8 operator compliance, model footprint, and multi-slice macro F1 before approving a release candidate.
 
+> **Documentation:** [Audio Corpus & Signal QA SOP (`docs/data_collection_sop.md`)](./docs/data_collection_sop.md) | [Model & Data Cards (`docs/model_and_data_cards.md`)](./docs/model_and_data_cards.md)
+
 ```mermaid
 flowchart LR
     A["Raw Corpus (320 WAVs)"] --> B["Stage 1: Signal QA (ingest_qa.py)"]

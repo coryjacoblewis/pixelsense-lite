@@ -157,7 +157,7 @@ def run_confounder_ablations(
     slices = load_cached_eval_slices()
 
     configs = [
-        ("v1_baseline", "v1", 65, True),
+        ("v1_baseline", "v1", 65, False),
         ("step_matched_clean", "v1", 325, False),
         ("v2_augmentation_only", "v2", 65, False),
         ("v2_data_flywheel", "v2", 65, True),

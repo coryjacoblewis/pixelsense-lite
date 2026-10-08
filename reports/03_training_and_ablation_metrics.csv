@@ -1,5 +1,5 @@
 configuration,train_views,epochs,adjudication_weighted,f1_clean_%,f1_pocket_occluded_%,f1_appliance_noise_3db_%
-v1_baseline,181,65,True,83.99,45.91,38.24
+v1_baseline,181,65,False,83.99,45.91,38.24
 step_matched_clean,181,325,False,81.97,69.48,26.77
 v2_augmentation_only,905,65,False,82.03,83.21,77.27
 v2_data_flywheel,905,65,True,90.5,90.5,77.41
