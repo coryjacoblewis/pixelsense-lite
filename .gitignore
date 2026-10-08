@@ -1,0 +1,22 @@
+# Virtual Environment & Python Bytecode
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Raw Audio Dataset & Intermediate Tensors (Downloaded/Generated Deterministically)
+data/ESC-50-master.zip
+data/ESC-50-master/
+data/golden_eval/
+data/cache/
+
+# Local Benchmark Binary
+benchmark_model
+
+# OS Metadata
+.DS_Store
+
+# Tracked model binaries and telemetry reports
+!models/**/*.tflite
+!reports/*

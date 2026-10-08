@@ -1,0 +1,119 @@
+================================================================================
+ PASS 1: NATIVE ARM64 RAW CPU KERNEL PROFILE (1 Thread, --use_xnnpack=false)
+================================================================================
+INFO: STARTING!
+INFO: Log parameter values verbosely: [0]
+INFO: Min num runs: [200]
+INFO: Num threads: [1]
+INFO: Min warmup runs: [20]
+INFO: Graph: [models/v2_data_flywheel/model_int8.tflite]
+INFO: Signature to run: []
+INFO: Enable op profiling: [1]
+INFO: Op profiling output mode.: [csv]
+INFO: Op profiling output file.: [reports/05_arm64_op_profile_int8.csv]
+INFO: CSV File to export profiling data to: [reports/05_arm64_op_profile_int8.csv]
+INFO: #threads used for CPU inference: [1]
+INFO: Use xnnpack: [0]
+INFO: Loaded model models/v2_data_flywheel/model_int8.tflite
+INFO: The input model file size (MB): 0.023536
+INFO: Initialized session in 0.5ms.
+INFO: Running benchmark for at least 20 iterations and at least 0.5 seconds but terminate if exceeding 150 seconds.
+INFO: count=1677 first=453 curr=297 min=294 max=453 avg=298.103 std=7 p5=295 median=297 p95=304
+
+INFO: Running benchmark for at least 200 iterations and at least 1 seconds but terminate if exceeding 150 seconds.
+INFO: count=3262 first=320 curr=299 min=297 max=375 avg=300.968 std=4 p5=297 median=299 p95=310
+
+INFO: Inference timings in us: Init: 500, First inference: 453, Warmup (avg): 298.103, Inference (avg): 300.968
+INFO: Note: as the benchmark tool itself affects memory footprint, the following is only APPROXIMATE to the actual memory footprint of the model at runtime. Take the information at your discretion.
+INFO: Memory footprint delta from the start of the tool (MB): init=2.77344 overall=3.27344
+
+================================================================================
+ PASS 2: NATIVE ARM64 XNNPACK DELEGATE PROFILE (1 Thread, --use_xnnpack=true)
+================================================================================
+INFO: STARTING!
+INFO: Log parameter values verbosely: [0]
+INFO: Min num runs: [200]
+INFO: Num threads: [1]
+INFO: Min warmup runs: [20]
+INFO: Graph: [models/v2_data_flywheel/model_int8.tflite]
+INFO: Signature to run: []
+INFO: Enable op profiling: [1]
+INFO: #threads used for CPU inference: [1]
+INFO: Use xnnpack: [1]
+INFO: Loaded model models/v2_data_flywheel/model_int8.tflite
+INFO: XNNPACK delegate created.
+INFO: Explicitly applied XNNPACK delegate, and the model graph will be partially executed by the delegate w/ 1 delegate kernels.
+INFO: The input model file size (MB): 0.023536
+INFO: Initialized session in 0.804ms.
+INFO: Running benchmark for at least 20 iterations and at least 0.5 seconds but terminate if exceeding 150 seconds.
+INFO: count=2931 first=188 curr=169 min=169 max=250 avg=170.373 std=3 p5=169 median=170 p95=174
+
+INFO: Running benchmark for at least 200 iterations and at least 1 seconds but terminate if exceeding 150 seconds.
+INFO: count=5725 first=180 curr=171 min=170 max=262 avg=172.382 std=3 p5=171 median=171 p95=177
+
+INFO: Inference timings in us: Init: 804, First inference: 188, Warmup (avg): 170.373, Inference (avg): 172.382
+INFO: Note: as the benchmark tool itself affects memory footprint, the following is only APPROXIMATE to the actual memory footprint of the model at runtime. Take the information at your discretion.
+INFO: Memory footprint delta from the start of the tool (MB): init=3.89844 overall=4.14844
+INFO: Profiling Info for Benchmark Initialization:
+============================== Run Order ==============================
+	                             [node type]	  [first]	 [avg ms]	     [%]	  [cdf%]	  [mem KB]	[times called]	[Name]
+	                 ModifyGraphWithDelegate	    0.094	    0.049	 32.550%	 32.550%	     0.000	        2	ModifyGraphWithDelegate/0
+	                         AllocateTensors	    0.201	    0.201	 67.450%	100.000%	   512.000	        1	AllocateTensors/0
+
+============================== Top by Computation Time ==============================
+	                             [node type]	  [first]	 [avg ms]	     [%]	  [cdf%]	  [mem KB]	[times called]	[Name]
+	                         AllocateTensors	    0.201	    0.201	 67.450%	 67.450%	   512.000	        1	AllocateTensors/0
+	                 ModifyGraphWithDelegate	    0.094	    0.049	 32.550%	100.000%	     0.000	        2	ModifyGraphWithDelegate/0
+
+Number of nodes executed: 2
+============================== Summary by node type ==============================
+	                             [Node type]	  [count]	  [avg ms]	    [avg %]	    [cdf %]	  [mem KB]	[times called]
+	                         AllocateTensors	        1	     0.201	    67.450%	    67.450%	   512.000	        1
+	                 ModifyGraphWithDelegate	        1	     0.097	    32.550%	   100.000%	     0.000	        2
+
+Timings (microseconds): count=1 curr=298
+Memory (bytes): count=0
+2 nodes observed
+
+
+
+INFO: Operator-wise Profiling Info for Regular Benchmark Runs:
+============================== Run Order ==============================
+	                             [node type]	  [first]	 [avg ms]	     [%]	  [cdf%]	  [mem KB]	[times called]	[Name]
+	           Convolution (NHWC, QC8) IGEMM	    0.073	    0.072	 43.354%	 43.354%	     0.000	        1	Delegate/Convolution (NHWC, QC8) IGEMM:0
+	                  Max Pooling (NHWC, S8)	    0.006	    0.006	  3.583%	 46.937%	     0.000	        1	Delegate/Max Pooling (NHWC, S8):1
+	           Convolution (NHWC, QC8) IGEMM	    0.061	    0.061	 36.715%	 83.652%	     0.000	        1	Delegate/Convolution (NHWC, QC8) IGEMM:2
+	                  Max Pooling (NHWC, S8)	    0.002	    0.002	  1.203%	 84.855%	     0.000	        1	Delegate/Max Pooling (NHWC, S8):3
+	           Convolution (NHWC, QC8) IGEMM	    0.025	    0.025	 15.057%	 99.913%	     0.000	        1	Delegate/Convolution (NHWC, QC8) IGEMM:4
+	                          Mean (ND) Mean	    0.000	    0.000	  0.001%	 99.913%	     0.000	        1	Delegate/Mean (ND) Mean:5
+	    Fully Connected (NC, QS8, QC8W) GEMM	    0.000	    0.000	  0.000%	 99.913%	     0.000	        1	Delegate/Fully Connected (NC, QS8, QC8W) GEMM:6
+	    Fully Connected (NC, QS8, QC8W) GEMM	    0.000	    0.000	  0.000%	 99.913%	     0.000	        1	Delegate/Fully Connected (NC, QS8, QC8W) GEMM:7
+	                                 SOFTMAX	    0.000	    0.000	  0.087%	100.000%	     0.000	        1	[StatefulPartitionedCall_1:0]:8
+
+============================== Top by Computation Time ==============================
+	                             [node type]	  [first]	 [avg ms]	     [%]	  [cdf%]	  [mem KB]	[times called]	[Name]
+	           Convolution (NHWC, QC8) IGEMM	    0.073	    0.072	 43.354%	 43.354%	     0.000	        1	Delegate/Convolution (NHWC, QC8) IGEMM:0
+	           Convolution (NHWC, QC8) IGEMM	    0.061	    0.061	 36.715%	 80.069%	     0.000	        1	Delegate/Convolution (NHWC, QC8) IGEMM:2
+	           Convolution (NHWC, QC8) IGEMM	    0.025	    0.025	 15.057%	 95.127%	     0.000	        1	Delegate/Convolution (NHWC, QC8) IGEMM:4
+	                  Max Pooling (NHWC, S8)	    0.006	    0.006	  3.583%	 98.709%	     0.000	        1	Delegate/Max Pooling (NHWC, S8):1
+	                  Max Pooling (NHWC, S8)	    0.002	    0.002	  1.203%	 99.913%	     0.000	        1	Delegate/Max Pooling (NHWC, S8):3
+	                                 SOFTMAX	    0.000	    0.000	  0.087%	 99.999%	     0.000	        1	[StatefulPartitionedCall_1:0]:8
+	                          Mean (ND) Mean	    0.000	    0.000	  0.001%	100.000%	     0.000	        1	Delegate/Mean (ND) Mean:5
+	    Fully Connected (NC, QS8, QC8W) GEMM	    0.000	    0.000	  0.000%	100.000%	     0.000	        1	Delegate/Fully Connected (NC, QS8, QC8W) GEMM:7
+	    Fully Connected (NC, QS8, QC8W) GEMM	    0.000	    0.000	  0.000%	100.000%	     0.000	        1	Delegate/Fully Connected (NC, QS8, QC8W) GEMM:6
+
+Number of nodes executed: 9
+============================== Summary by node type ==============================
+	                             [Node type]	  [count]	  [avg ms]	    [avg %]	    [cdf %]	  [mem KB]	[times called]
+	           Convolution (NHWC, QC8) IGEMM	        3	     0.158	    95.758%	    95.758%	     0.000	        3
+	                  Max Pooling (NHWC, S8)	        2	     0.007	     4.242%	   100.000%	     0.000	        2
+	                                 SOFTMAX	        1	     0.000	     0.000%	   100.000%	     0.000	        1
+	                          Mean (ND) Mean	        1	     0.000	     0.000%	   100.000%	     0.000	        1
+	    Fully Connected (NC, QS8, QC8W) GEMM	        2	     0.000	     0.000%	   100.000%	     0.000	        2
+
+Timings (microseconds): count=5725 first=167 curr=165 min=165 max=252 avg=167.142 std=2
+Memory (bytes): count=0
+9 nodes observed
+
+
+

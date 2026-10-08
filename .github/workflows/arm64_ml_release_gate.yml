@@ -1,0 +1,87 @@
+name: ARM64 ML Release Gate
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  arm64-embedded-benchmark:
+    # Native ARM64 processor on GitHub Actions
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 (ARM64)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Audio & LiteRT Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y libsndfile1 wget file
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run End-to-End Ingestion QA, Drift Audit, Training & Slice Gate
+        run: python run_automated_pipeline.py
+
+      - name: Download Prebuilt ARM64 LiteRT Benchmark Binary
+        run: |
+          wget --https-only --retry-connrefused --waitretry=5 --tries=3 --timeout=30 -q -O benchmark_model \
+            https://storage.googleapis.com/tensorflow-nightly-public/prod/tensorflow/release/lite/tools/nightly/latest/linux_aarch64_benchmark_model
+          file benchmark_model | grep -q "ELF 64-bit LSB.*ARM aarch64"
+          chmod +x benchmark_model
+
+      - name: Capture Real ARM64 Operator-Level Hardware Telemetry (Raw CPU vs. XNNPACK Delegate)
+        run: |
+          echo "=== PASS 1: NATIVE ARM64 RAW CPU KERNEL PROFILE (1 Thread, --use_xnnpack=false) ===" > reports/05_arm64_hardware_telemetry_int8.txt
+          ./benchmark_model \
+            --graph=models/v2_data_flywheel/model_int8.tflite \
+            --num_threads=1 \
+            --warmup_runs=20 \
+            --num_runs=200 \
+            --use_xnnpack=false \
+            --enable_op_profiling=true \
+            --profiling_output_csv_file=reports/05_arm64_op_profile_int8.csv \
+            | tee -a reports/05_arm64_hardware_telemetry_int8.txt
+
+          echo -e "\n=== PASS 2: NATIVE ARM64 XNNPACK DELEGATE PROFILE (1 Thread, --use_xnnpack=true) ===" >> reports/05_arm64_hardware_telemetry_int8.txt
+          ./benchmark_model \
+            --graph=models/v2_data_flywheel/model_int8.tflite \
+            --num_threads=1 \
+            --warmup_runs=20 \
+            --num_runs=200 \
+            --use_xnnpack=true \
+            --enable_op_profiling=true \
+            | tee -a reports/05_arm64_hardware_telemetry_int8.txt
+
+      - name: Verify ARM64 Telemetry & Pipeline Invariants
+        run: python 05_verify_pipeline.py
+
+      - name: Render Release Scorecard in GitHub Step Summary
+        run: |
+          echo "## PixelSense-Lite Release Gate Scorecard" >> $GITHUB_STEP_SUMMARY
+          cat reports/04_release_gate_scorecard.md >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Native ARM64 Operator Telemetry (v2 INT8)" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          tail -n 45 reports/05_arm64_hardware_telemetry_int8.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Publish Release Artifacts & Hardware Telemetry
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-ml-release-package
+          path: |
+            models/**/*.tflite
+            reports/*

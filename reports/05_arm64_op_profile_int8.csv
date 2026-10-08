@@ -1,0 +1,58 @@
+Profiling Info for Benchmark Initialization:
+============================== Run Order ==============================
+node type, first, avg_ms, %, cdf%, mem KB, times called, name
+AllocateTensors, 0.044, 0.044, 100%, 100%, 256, 1, AllocateTensors/0
+
+============================== Top by Computation Time ==============================
+node type, first, avg_ms, %, cdf%, mem KB, times called, name
+AllocateTensors, 0.044, 0.044, 100%, 100%, 256, 1, AllocateTensors/0
+
+Number of nodes executed: 1
+============================== Summary by node type ==============================
+node type, count, avg_ms, avg %, cdf %, mem KB, times called
+AllocateTensors, 1, 0.044, 100%, 100%, 256, 1
+
+Timings (microseconds): count=1 curr=44
+Memory (bytes): count=0
+1 nodes observed
+
+
+Operator-wise Profiling Info for Regular Benchmark Runs:
+============================== Run Order ==============================
+node type, first, avg_ms, %, cdf%, mem KB, times called, name
+CONV_2D, 0.094, 0.093966, 31.4387%, 31.4387%, 0, 1, [pixelsense_lite_cnn_1/conv1_1/Relu;pixelsense_lite_cnn_1/conv1_1/BiasAdd;pixelsense_lite_cnn_1/conv1_1/convolution;pixelsense_lite_cnn_1/conv1_1/Squeeze1]:0
+MAX_POOL_2D, 0.012, 0.0110018, 3.68095%, 35.1197%, 0, 1, [pixelsense_lite_cnn_1/pool1_1/MaxPool2d]:1
+CONV_2D, 0.08, 0.0800788, 26.7924%, 61.9121%, 0, 1, [pixelsense_lite_cnn_1/conv2_1/Relu;pixelsense_lite_cnn_1/conv2_1/BiasAdd;pixelsense_lite_cnn_1/conv2_1/convolution;pixelsense_lite_cnn_1/conv2_1/Squeeze1]:2
+MAX_POOL_2D, 0.004, 0.00339516, 1.13594%, 63.048%, 0, 1, [pixelsense_lite_cnn_1/pool2_1/MaxPool2d]:3
+CONV_2D, 0.034, 0.0337971, 11.3077%, 74.3557%, 0, 1, [pixelsense_lite_cnn_1/conv3_1/Relu;pixelsense_lite_cnn_1/conv3_1/BiasAdd;pixelsense_lite_cnn_1/conv3_1/convolution;pixelsense_lite_cnn_1/conv3_1/Squeeze1]:4
+MEAN, 0.088, 0.0758673, 25.3833%, 99.7391%, 0, 1, [pixelsense_lite_cnn_1/gap_1/Mean]:5
+FULLY_CONNECTED, 0, 0.000417229, 0.139595%, 99.8787%, 0, 1, [pixelsense_lite_cnn_1/fc1_1/MatMul;pixelsense_lite_cnn_1/fc1_1/Relu;pixelsense_lite_cnn_1/fc1_1/BiasAdd]:6
+FULLY_CONNECTED, 0.001, 0.000190374, 0.0636945%, 99.9424%, 0, 1, [pixelsense_lite_cnn_1/probs_1/MatMul;pixelsense_lite_cnn_1/probs_1/BiasAdd]:7
+SOFTMAX, 0, 0.000172287, 0.057643%, 100%, 0, 1, [StatefulPartitionedCall_1:0]:8
+
+============================== Top by Computation Time ==============================
+node type, first, avg_ms, %, cdf%, mem KB, times called, name
+CONV_2D, 0.094, 0.093966, 31.4387%, 31.4387%, 0, 1, [pixelsense_lite_cnn_1/conv1_1/Relu;pixelsense_lite_cnn_1/conv1_1/BiasAdd;pixelsense_lite_cnn_1/conv1_1/convolution;pixelsense_lite_cnn_1/conv1_1/Squeeze1]:0
+CONV_2D, 0.08, 0.0800788, 26.7924%, 58.2312%, 0, 1, [pixelsense_lite_cnn_1/conv2_1/Relu;pixelsense_lite_cnn_1/conv2_1/BiasAdd;pixelsense_lite_cnn_1/conv2_1/convolution;pixelsense_lite_cnn_1/conv2_1/Squeeze1]:2
+MEAN, 0.088, 0.0758673, 25.3833%, 83.6145%, 0, 1, [pixelsense_lite_cnn_1/gap_1/Mean]:5
+CONV_2D, 0.034, 0.0337971, 11.3077%, 94.9222%, 0, 1, [pixelsense_lite_cnn_1/conv3_1/Relu;pixelsense_lite_cnn_1/conv3_1/BiasAdd;pixelsense_lite_cnn_1/conv3_1/convolution;pixelsense_lite_cnn_1/conv3_1/Squeeze1]:4
+MAX_POOL_2D, 0.012, 0.0110018, 3.68095%, 98.6031%, 0, 1, [pixelsense_lite_cnn_1/pool1_1/MaxPool2d]:1
+MAX_POOL_2D, 0.004, 0.00339516, 1.13594%, 99.7391%, 0, 1, [pixelsense_lite_cnn_1/pool2_1/MaxPool2d]:3
+FULLY_CONNECTED, 0, 0.000417229, 0.139595%, 99.8787%, 0, 1, [pixelsense_lite_cnn_1/fc1_1/MatMul;pixelsense_lite_cnn_1/fc1_1/Relu;pixelsense_lite_cnn_1/fc1_1/BiasAdd]:6
+FULLY_CONNECTED, 0.001, 0.000190374, 0.0636945%, 99.9424%, 0, 1, [pixelsense_lite_cnn_1/probs_1/MatMul;pixelsense_lite_cnn_1/probs_1/BiasAdd]:7
+SOFTMAX, 0, 0.000172287, 0.057643%, 100%, 0, 1, [StatefulPartitionedCall_1:0]:8
+
+Number of nodes executed: 9
+============================== Summary by node type ==============================
+node type, count, avg_ms, avg %, cdf %, mem KB, times called
+CONV_2D, 3, 0.206, 69.8305%, 69.8305%, 0, 3
+MEAN, 1, 0.075, 25.4237%, 95.2542%, 0, 1
+MAX_POOL_2D, 2, 0.014, 4.74576%, 100%, 0, 2
+SOFTMAX, 1, 0, 0%, 100%, 0, 1
+FULLY_CONNECTED, 2, 0, 0%, 100%, 0, 2
+
+Timings (microseconds): count=3262 first=313 curr=298 min=293 max=369 avg=298.886 std=4
+Memory (bytes): count=0
+9 nodes observed
+
+
