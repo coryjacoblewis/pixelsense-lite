@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 1: Audio Corpus Ingestion, Physical Signal QA & Speech-Band Screening."""
+"""Stage 1: Audio corpus ingestion, signal QA, and background vocal-bleed screening."""
 
 import os
 import urllib.request
@@ -19,94 +19,41 @@ INTERFERER_CLASSES = ["vacuum_cleaner", "washing_machine", "engine", "rain"]
 ALL_MODEL_CLASSES = ["background_noise"] + TARGET_CLASSES
 CLASS_MAP = {name: idx for idx, name in enumerate(ALL_MODEL_CLASSES)}
 
-MAX_ARCHIVE_UNCOMPRESSED_BYTES = 1_500_000_000
-
 
 def download_real_corpus() -> None:
-    """Downloads and extracts the ESC-50 environmental audio dataset if not cached."""
+    """Downloads and extracts the ESC-50 dataset if not already cached locally."""
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(ESC_DIR):
-        print("[Stage 1] Downloading real ESC-50 Freesound corpus (~600MB)...")
+        print("[Stage 1] Downloading ESC-50 corpus (~600MB)...")
         urllib.request.urlretrieve(ESC_URL, ESC_ZIP)
         with zipfile.ZipFile(ESC_ZIP, "r") as zf:
-            abs_target = os.path.abspath(DATA_DIR)
-            total_uncompressed = 0
-            for info in zf.infolist():
-                member_path = os.path.abspath(os.path.join(DATA_DIR, info.filename))
-                if (
-                    not member_path.startswith(abs_target + os.sep)
-                    and member_path != abs_target
-                ):
-                    raise RuntimeError(
-                        f"Unsafe zip path traversal blocked: {info.filename}"
-                    )
-                unix_mode = (info.external_attr >> 16) & 0o170000
-                if unix_mode == 0o120000:
-                    raise RuntimeError(
-                        f"Unsafe symlink entry in zip archive blocked: {info.filename}"
-                    )
-                total_uncompressed += int(info.file_size)
-                if total_uncompressed > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
-                    raise RuntimeError(
-                        f"Zip archive exceeds safe uncompressed byte limit ({MAX_ARCHIVE_UNCOMPRESSED_BYTES} B)"
-                    )
             zf.extractall(DATA_DIR)
         print("[Stage 1] Download and extraction complete.")
     else:
-        print("[Stage 1] Cached ESC-50 corpus found at data/ESC-50-master.")
+        print("[Stage 1] Using cached ESC-50 corpus at data/ESC-50-master.")
 
 
-def _read_wav_bits_per_sample(filepath: str) -> int | None:
-    """Reads the wBitsPerSample field from a RIFF WAV fmt chunk if present."""
-    try:
-        with open(filepath, "rb") as f:
-            header = f.read(128)
-        if len(header) >= 36 and header[:4] == b"RIFF" and header[8:12] == b"WAVE":
-            idx = header.find(b"fmt ")
-            if idx != -1 and idx + 24 <= len(header):
-                return int.from_bytes(header[idx + 22 : idx + 24], "little")
-    except Exception:
-        pass
-    return None
-
-
-def _scale_pcm(raw: np.ndarray, bits_per_sample: int | None = None) -> np.ndarray:
-    """Scales int16, int24/int32, uint8, or float PCM buffers to [-1.0, 1.0] float32."""
+def scale_pcm(raw: np.ndarray) -> np.ndarray:
+    """Scales integer or float PCM buffers to [-1.0, 1.0] float32."""
     if raw.dtype == np.int16:
         return raw.astype(np.float32) / 32768.0
     if raw.dtype == np.int32:
-        max_val = float(np.max(np.abs(raw))) if raw.size > 0 else 0.0
-        lsb_all_zero = bool(raw.size > 0 and np.all((raw & 0xFF) == 0))
-        if bits_per_sample == 32:
-            denom = 2147483648.0
-        elif bits_per_sample == 24:
-            denom = 2147483648.0 if lsb_all_zero else 8388608.0
-        else:
-            denom = (
-                8388608.0
-                if (not lsb_all_zero and 0.0 < max_val <= 8388608.0)
-                else 2147483648.0
-            )
-        return raw.astype(np.float32) / denom
+        return raw.astype(np.float32) / 2147483648.0
     if raw.dtype == np.uint8:
         return (raw.astype(np.float32) - 128.0) / 128.0
     return raw.astype(np.float32)
 
 
-def normalize_pcm_waveform(
-    raw: np.ndarray, bits_per_sample: int | None = None
-) -> np.ndarray:
-    """Normalizes PCM buffers to [-1.0, 1.0] mono float32."""
-    x = _scale_pcm(raw, bits_per_sample)
-    if x.ndim > 1:
-        mono_mean = np.mean(x, axis=1)
-        ch_energies = np.sum(x**2, axis=0)
-        max_ch_idx = int(np.argmax(ch_energies))
-        if float(np.sum(mono_mean**2)) < 0.25 * float(ch_energies[max_ch_idx]):
-            x = x[:, max_ch_idx]
-        else:
-            x = mono_mean
-    return x
+def to_mono(scaled: np.ndarray) -> np.ndarray:
+    """Downmixes multi-channel audio to mono, falling back to dominant channel if phase-cancelled."""
+    if scaled.ndim <= 1:
+        return scaled
+    mono_mean = np.mean(scaled, axis=1)
+    ch_energies = np.sum(scaled**2, axis=0)
+    max_ch_idx = int(np.argmax(ch_energies))
+    if float(np.sum(mono_mean**2)) < 0.25 * float(ch_energies[max_ch_idx]):
+        return scaled[:, max_ch_idx]
+    return mono_mean
 
 
 def _frame_rms(sig: np.ndarray, sr: int) -> np.ndarray:
@@ -120,7 +67,7 @@ def _frame_rms(sig: np.ndarray, sr: int) -> np.ndarray:
 
 
 def compute_speech_formant_metrics(x: np.ndarray, sr: int) -> tuple[float, float]:
-    """Computes 300-3,400 Hz speech-band energy ratio and 50ms syllabic envelope crest."""
+    """Computes 300-3,400 Hz band energy ratio and 50ms envelope crest factor."""
     x_ac = x - float(np.mean(x))
     nyq = max(0.5 * sr, 400.0)
     low = min(max(300.0 / nyq, 0.01), 0.90)
@@ -152,7 +99,7 @@ def _corrupt_header_result(sr: int = 0) -> dict:
 
 
 def audit_wav_signal(filepath: str, category: str) -> dict:
-    """Audits a WAV file for hardware anomalies and speech-band PII (with PII precedence)."""
+    """Audits a WAV file for clipping, dead air, DC bias, and vocal bleed in background classes."""
     try:
         sr, raw = wavfile.read(filepath)
     except Exception:
@@ -161,9 +108,8 @@ def audit_wav_signal(filepath: str, category: str) -> dict:
     if sr <= 0 or raw is None or raw.size == 0 or not np.all(np.isfinite(raw)):
         return _corrupt_header_result(sr)
 
-    bits_per_sample = _read_wav_bits_per_sample(filepath)
-    scaled = _scale_pcm(raw, bits_per_sample=bits_per_sample)
-    x = normalize_pcm_waveform(scaled)
+    scaled = scale_pcm(raw)
+    x = to_mono(scaled)
 
     peak_amp = float(np.max(np.abs(scaled)))
     dc_offset = float(np.max(np.abs(np.mean(scaled, axis=0))))
@@ -176,14 +122,15 @@ def audit_wav_signal(filepath: str, category: str) -> dict:
     )
 
     speech_band_ratio, envelope_crest = compute_speech_formant_metrics(x, sr)
-    is_speech_pii_risk = (
+    # Screen non-vocal background/interferer recordings for human vocal bleed / PII
+    has_vocal_bleed = (
         category in INTERFERER_CLASSES
         and speech_band_ratio > 0.62
         and envelope_crest > 2.35
     )
 
     flags = []
-    if is_speech_pii_risk:
+    if has_vocal_bleed:
         flags.append("QUARANTINE_POTENTIAL_SPEECH_PII")
     if peak_amp >= 0.998:
         flags.append("QUARANTINE_ADC_PREAMP_CLIPPING")
@@ -205,9 +152,9 @@ def audit_wav_signal(filepath: str, category: str) -> dict:
 
 
 def run_ingestion_qa() -> pd.DataFrame:
-    """Runs the Stage 1 download and signal/PII audit across all 320 recordings."""
+    """Runs the Stage 1 download and signal QA audit across all 320 recordings."""
     download_real_corpus()
-    print("[Stage 1] Running audio ingestion QA and speech-band screening...")
+    print("[Stage 1] Running audio ingestion QA...")
 
     meta_path = os.path.join(ESC_DIR, "meta", "esc50.csv")
     meta = pd.read_csv(meta_path)
@@ -227,11 +174,11 @@ def run_ingestion_qa() -> pd.DataFrame:
     pass_count = int((qa_df["qa_status"] == "PASS").sum())
     quarantine_count = len(qa_df) - pass_count
     print(
-        f"[Stage 1] Audited {len(qa_df)} clips | PASS: {pass_count} | QUARANTINED: {quarantine_count} ({quarantine_count / len(qa_df) * 100:.1f}%) -> {out_csv}"
+        f"[Stage 1] Audited {len(qa_df)} clips | PASS: {pass_count} | "
+        f"QUARANTINED: {quarantine_count} ({quarantine_count / len(qa_df) * 100:.1f}%) -> {out_csv}"
     )
     return qa_df
 
 
 if __name__ == "__main__":
     run_ingestion_qa()
-

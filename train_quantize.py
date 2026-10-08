@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 3: Controlled Two-Release Model Training & LiteRT (.tflite) Quantization Suite."""
+"""Stage 3: Model training and LiteRT (.tflite) quantization."""
 
 import argparse
 import os
@@ -7,6 +7,8 @@ import numpy as np
 import tensorflow as tf
 from sklearn.metrics import f1_score
 from sklearn.utils.class_weight import compute_class_weight
+
+from release_gate import load_cached_eval_slices
 
 NUM_CLASSES = 5
 
@@ -85,7 +87,10 @@ def compile_tflite_suite(
         with open(p, "wb") as f:
             f.write(conv.convert())
         paths[q_name] = p
-        print(f"  -> [{version_tag}] {os.path.basename(p)} ({q_name}): {os.path.getsize(p) / 1024.0:.2f} KB")
+        print(
+            f"  -> [{version_tag}] {os.path.basename(p)} ({q_name}): "
+            f"{os.path.getsize(p) / 1024.0:.2f} KB"
+        )
 
     return paths
 
@@ -126,17 +131,17 @@ def train_and_export_version(version_tag: str, epochs: int = 65) -> dict[str, st
 
 
 def run_confounder_ablations() -> dict[str, dict[str, float]]:
-    """Reproduces the Section 2.1 step-matched and uniform-weight confounder ablations on Fold 5."""
-    import importlib
-
-    slices = importlib.import_module("04_release_gate").load_cached_eval_slices()
+    """Runs step-matched and uniform-weight ablations on Fold 5."""
+    slices = load_cached_eval_slices()
 
     def _eval_keras(model: tf.keras.Model) -> dict[str, float]:
         return {
             s_name: round(
                 float(
                     f1_score(
-                        y_s, np.argmax(model.predict(X_s, verbose=0), axis=-1), average="macro"
+                        y_s,
+                        np.argmax(model.predict(X_s, verbose=0), axis=-1),
+                        average="macro",
                     )
                     * 100.0
                 ),
@@ -169,7 +174,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run-ablations",
         action="store_true",
-        help="Reproduce the controlled step-matched and uniform-weight confounder ablations.",
+        help="Run step-matched and uniform-weight ablations.",
     )
     args = parser.parse_args()
 
@@ -182,4 +187,3 @@ if __name__ == "__main__":
         train_and_export_version(ver)
     if args.run_ablations:
         run_confounder_ablations()
-

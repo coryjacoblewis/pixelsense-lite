@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Stage 2: Annotation Consensus Audit (Cohen's Kappa), Golden Slices & PSI Drift."""
+"""Stage 2: Out-of-fold annotation consensus audit, evaluation slices, and spectral PSI drift."""
 
-import importlib
 import os
 import librosa
 import numpy as np
@@ -11,13 +10,9 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import cohen_kappa_score
 from sklearn.model_selection import StratifiedGroupKFold
 
-_ingest = importlib.import_module("01_ingest_qa")
-TARGET_SR = 16000
-TARGET_CLASSES = _ingest.TARGET_CLASSES
-INTERFERER_CLASSES = _ingest.INTERFERER_CLASSES
-ALL_MODEL_CLASSES = _ingest.ALL_MODEL_CLASSES
-CLASS_MAP = _ingest.CLASS_MAP
+from ingest_qa import ALL_MODEL_CLASSES, CLASS_MAP, INTERFERER_CLASSES
 
+TARGET_SR = 16000
 EVAL_POCKET_CUTOFF_HZ = 1600.0
 EVAL_NOISE_SNR_DB = 3.0
 TRAIN_FLYWHEEL_CUTOFFS_HZ = (1350.0, 2100.0)
@@ -91,7 +86,7 @@ def run_annotation_consensus_audit(
     folds: np.ndarray | None = None,
     out_csv: str = "reports/02_label_consensus_and_kappa_audit.csv",
 ) -> tuple[float, pd.DataFrame]:
-    """Audits crowd labels against a holdout-isolated (`src_file`-grouped) OOF spectral teacher."""
+    """Audits labels against a holdout-isolated (src_file-grouped) out-of-fold spectral teacher."""
     mel_2d = X_mel.squeeze(-1)
     X_flat = np.hstack(
         [
@@ -163,7 +158,8 @@ def run_annotation_consensus_audit(
     )
     agreement_pct = float(audit_df["label_agreement"].mean() * 100.0)
     print(
-        f"[Stage 2A] OOF Agreement: {agreement_pct:.1f}% | Kappa: {kappa:.3f} | Adjudication: {adjudication_count} -> {out_csv}"
+        f"[Stage 2A] OOF Agreement: {agreement_pct:.1f}% | Kappa: {kappa:.3f} | "
+        f"Adjudication: {adjudication_count} -> {out_csv}"
     )
     return kappa, audit_df
 
@@ -216,7 +212,7 @@ def run_consensus_and_drift(
 
     train_src_files = set(clean_df[clean_df["fold"] != 5]["src_file"])
     eval_src_files = set(clean_df[clean_df["fold"] == 5]["src_file"])
-    assert train_src_files.isdisjoint(eval_src_files), "CRITICAL: src_file leakage across folds!"
+    assert train_src_files.isdisjoint(eval_src_files), "src_file leakage across folds"
 
     waveforms, all_mels, all_labels = [], [], []
     train_noises, eval_noises = [], []
@@ -252,7 +248,6 @@ def run_consensus_and_drift(
         "pocket_occluded": ([], []),
         "appliance_noise_3db": ([], []),
     }
-    X_pocket_blind, X_noise_blind = [], []
 
     for idx, (y, mel_clean, win_start, label, fold) in enumerate(waveforms):
         is_disputed = (
@@ -267,14 +262,11 @@ def run_consensus_and_drift(
 
             for s_name, mel_arr in [
                 ("clean", mel_clean),
-                ("pocket_occluded", wav_to_mel(y_pocket, center_start=win_start)[0]),
-                ("appliance_noise_3db", wav_to_mel(y_noisy, center_start=win_start)[0]),
+                ("pocket_occluded", wav_to_mel(y_pocket)[0]),
+                ("appliance_noise_3db", wav_to_mel(y_noisy)[0]),
             ]:
                 eval_slices[s_name][0].append(mel_arr)
                 eval_slices[s_name][1].append(label)
-
-            X_pocket_blind.append(wav_to_mel(y_pocket, center_start=None)[0])
-            X_noise_blind.append(wav_to_mel(y_noisy, center_start=None)[0])
         else:
             X_train_v1.append(mel_clean)
             y_train_v1.append(label)
@@ -310,8 +302,6 @@ def run_consensus_and_drift(
         ("X_train_v2", X_v2_arr),
         ("y_train_v2", y_v2_arr),
         ("w_train_v2", w_v2_arr),
-        ("X_pocket_occluded_blind", np.array(X_pocket_blind)),
-        ("X_appliance_noise_3db_blind", np.array(X_noise_blind)),
     ]:
         np.save(f"data/golden_eval/{name}.npy", arr)
 
@@ -353,4 +343,3 @@ def run_consensus_and_drift(
 
 if __name__ == "__main__":
     run_consensus_and_drift()
-

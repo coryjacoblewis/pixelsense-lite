@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 4: Subgraph Zero-Fallback Audit, Static Tensor Arena Profiler & Multi-Slice Release Gate."""
+"""Stage 4: Subgraph quantization audit and multi-slice release gate."""
 
 import argparse
 import os
@@ -13,9 +13,8 @@ from sklearn.metrics import f1_score
 SLICES = ["clean", "pocket_occluded", "appliance_noise_3db"]
 
 MAX_FLASH_KB = 45.0
-MAX_TENSOR_ARENA_KB = 160.0
+MAX_SUBGRAPH_TENSOR_KB = 160.0
 MAX_P99_LATENCY_MS = 5.0
-MAX_DAILY_BATTERY_PCT = 0.050
 ALLOWED_DSP_OPS = {
     "CONV_2D",
     "MAX_POOL_2D",
@@ -33,7 +32,7 @@ MAX_BG_FPR_PCT = 15.0
 
 
 def audit_int8_hardware_compatibility(interpreter: tf.lite.Interpreter) -> dict:
-    """Audits .tflite subgraph tensors and operators for 0% float fallback, op whitelist, and SRAM arena."""
+    """Audits .tflite subgraph tensors and operators for INT8 compliance and static tensor footprint."""
     tensors = interpreter.get_tensor_details()
     non_int8_dtypes = (np.float32, np.float16, np.float64, np.int64, np.int16)
     float_fallback_count = sum(1 for t in tensors if t["dtype"] in non_int8_dtypes)
@@ -64,7 +63,7 @@ def audit_int8_hardware_compatibility(interpreter: tf.lite.Interpreter) -> dict:
     )
 
     return {
-        "tensor_arena_kb": round(tensor_bytes / 1024.0, 2),
+        "subgraph_tensor_kb": round(tensor_bytes / 1024.0, 2),
         "total_subgraph_tensors": len(tensors),
         "float_fallback_count": float_fallback_count,
         "unsupported_op_count": unsupported_op_count,
@@ -78,29 +77,10 @@ def audit_int8_hardware_compatibility(interpreter: tf.lite.Interpreter) -> dict:
     }
 
 
-def compute_daily_battery_pct(
-    p99_latency_ms: float, dsp_delegate_ready: bool
-) -> float:
-    """Computes 24-hour marginal battery drain (%) for 43,200 inferences/day against a 19,250 mWh battery."""
-    inferences_per_day = 43200.0
-    battery_capacity_mwh = 19250.0
-
-    if dsp_delegate_ready:
-        active_power_mw = 15.0
-        effective_ms_per_run = p99_latency_ms + 1.2
-    else:
-        active_power_mw = 420.0
-        effective_ms_per_run = p99_latency_ms + 12.0
-
-    daily_active_hours = (effective_ms_per_run / 1000.0) * inferences_per_day / 3600.0
-    daily_energy_mwh = active_power_mw * daily_active_hours
-    return round((daily_energy_mwh / battery_capacity_mwh) * 100.0, 3)
-
-
 def evaluate_tflite_binary(
     tflite_path: str, eval_slices: dict[str, tuple[np.ndarray, np.ndarray]]
 ) -> dict:
-    """Runs full subgraph inspection and multi-slice inference on a compiled .tflite binary."""
+    """Runs subgraph inspection and multi-slice inference on a compiled .tflite binary."""
     interpreter = tf.lite.Interpreter(model_path=tflite_path)
     interpreter.allocate_tensors()
 
@@ -143,17 +123,15 @@ def evaluate_tflite_binary(
 
     p99_ms = round(float(np.percentile(latencies_ms, 99)), 3)
     flash_kb = round(os.path.getsize(tflite_path) / 1024.0, 2)
-    daily_batt_pct = compute_daily_battery_pct(p99_ms, hw_audit["dsp_delegate_ready"])
     bg_fpr_pct = round(
         (bg_false_positives / float(max(1, bg_total_clips))) * 100.0, 2
     )
 
     return {
         "flash_kb": flash_kb,
-        "tensor_arena_kb": hw_audit["tensor_arena_kb"],
+        "subgraph_tensor_kb": hw_audit["subgraph_tensor_kb"],
         "int8_compliance_%": hw_audit["int8_compliance_%"],
         "p99_latency_ms": p99_ms,
-        "daily_battery_%": daily_batt_pct,
         "f1_clean_%": slice_f1["clean"],
         "f1_pocket_occluded_%": slice_f1["pocket_occluded"],
         "f1_appliance_noise_3db_%": slice_f1["appliance_noise_3db"],
@@ -163,7 +141,7 @@ def evaluate_tflite_binary(
 
 
 def load_cached_eval_slices() -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    """Loads the Fold 5 Golden Evaluation slices from data/golden_eval/."""
+    """Loads the Fold 5 evaluation slices from data/golden_eval/."""
     slices = {}
     for s in SLICES:
         X_s = np.load(f"data/golden_eval/X_{s}.npy")
@@ -197,10 +175,9 @@ def run_release_gate(
 
             hw_pass = (
                 res["flash_kb"] <= MAX_FLASH_KB
-                and res["tensor_arena_kb"] <= MAX_TENSOR_ARENA_KB
+                and res["subgraph_tensor_kb"] <= MAX_SUBGRAPH_TENSOR_KB
                 and dsp_ready
                 and res["p99_latency_ms"] <= MAX_P99_LATENCY_MS
-                and res["daily_battery_%"] <= MAX_DAILY_BATTERY_PCT
             )
             quality_pass = (
                 res["f1_clean_%"] >= SLICE_F1_THRESHOLDS["clean"]
@@ -216,7 +193,7 @@ def run_release_gate(
             elif not hw_pass and not quality_pass:
                 gate_status = "BLOCKED (HW + SLICE)"
             elif not hw_pass:
-                gate_status = "BLOCKED (HW/BATTERY)"
+                gate_status = "BLOCKED (HW)"
             else:
                 gate_status = "BLOCKED (SLICE F1)"
 

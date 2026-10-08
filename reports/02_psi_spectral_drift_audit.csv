@@ -1,4 +1,4 @@
 evaluation_slice,eval_samples,high_freq_band_psi,noise_floor_psi,composite_psi,sla_threshold,drift_status
 clean,49,0.0642,0.0539,0.0642,0.25,STABLE
-pocket_occluded,49,1.9688,0.369,1.9688,0.25,CRITICAL_DRIFT_TRIGGER_FLYWHEEL
-appliance_noise_3db,49,0.7213,0.7961,0.7961,0.25,CRITICAL_DRIFT_TRIGGER_FLYWHEEL
+pocket_occluded,49,2.0045,0.3739,2.0045,0.25,CRITICAL_DRIFT_TRIGGER_FLYWHEEL
+appliance_noise_3db,49,0.7587,0.8134,0.8134,0.25,CRITICAL_DRIFT_TRIGGER_FLYWHEEL

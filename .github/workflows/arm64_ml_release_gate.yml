@@ -13,7 +13,6 @@ env:
 
 jobs:
   arm64-embedded-benchmark:
-    # Native ARM64 processor on GitHub Actions
     runs-on: ubuntu-24.04-arm
 
     steps:
@@ -42,9 +41,13 @@ jobs:
           file benchmark_model | grep -q "ELF 64-bit LSB.*ARM aarch64"
           chmod +x benchmark_model
 
-      - name: Capture Real ARM64 Operator-Level Hardware Telemetry (Raw CPU vs. XNNPACK Delegate)
+      - name: Capture ARM64 Operator-Level Hardware Telemetry (Raw CPU vs. XNNPACK Delegate)
         run: |
-          echo "=== PASS 1: NATIVE ARM64 RAW CPU KERNEL PROFILE (1 Thread, --use_xnnpack=false) ===" > reports/05_arm64_hardware_telemetry_int8.txt
+          {
+            echo "================================================================================"
+            echo " PASS 1: NATIVE ARM64 RAW CPU KERNEL PROFILE (1 Thread, --use_xnnpack=false)"
+            echo "================================================================================"
+          } > reports/05_arm64_hardware_telemetry_int8.txt
           ./benchmark_model \
             --graph=models/v2_data_flywheel/model_int8.tflite \
             --num_threads=1 \
@@ -55,7 +58,12 @@ jobs:
             --profiling_output_csv_file=reports/05_arm64_op_profile_int8.csv \
             2>&1 | tee -a reports/05_arm64_hardware_telemetry_int8.txt
 
-          echo -e "\n=== PASS 2: NATIVE ARM64 XNNPACK DELEGATE PROFILE (1 Thread, --use_xnnpack=true) ===" >> reports/05_arm64_hardware_telemetry_int8.txt
+          {
+            echo ""
+            echo "================================================================================"
+            echo " PASS 2: NATIVE ARM64 XNNPACK DELEGATE PROFILE (1 Thread, --use_xnnpack=true)"
+            echo "================================================================================"
+          } >> reports/05_arm64_hardware_telemetry_int8.txt
           ./benchmark_model \
             --graph=models/v2_data_flywheel/model_int8.tflite \
             --num_threads=1 \
@@ -65,8 +73,8 @@ jobs:
             --enable_op_profiling=true \
             2>&1 | tee -a reports/05_arm64_hardware_telemetry_int8.txt
 
-      - name: Verify ARM64 Telemetry & Pipeline Invariants
-        run: python 05_verify_pipeline.py
+      - name: Run Pipeline Test Suite
+        run: pytest test_pipeline.py
 
       - name: Render Release Scorecard in GitHub Step Summary
         run: |
