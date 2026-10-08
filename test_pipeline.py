@@ -69,7 +69,7 @@ def test_signal_qa_and_vocal_bleed_screening() -> None:
             "stereo_pii.wav",
             np.column_stack([speech_burst, -speech_burst]).astype(np.float32),
             "vacuum_cleaner",
-            "QUARANTINE_POTENTIAL_SPEECH_PII",
+            "QUARANTINE_FOREGROUND_VOCAL_BLEED",
         ),
         ("nan.wav", nan_wave, "rain", "QUARANTINE_CORRUPT_HEADER"),
     ]
@@ -84,7 +84,7 @@ def test_signal_qa_and_vocal_bleed_screening() -> None:
         res_dc = _audit_temp_wav(
             tmpdir, "dc_speech.wav", sr, dc_clipped_speech, "vacuum_cleaner"
         )
-        assert res_dc["qa_status"] == "QUARANTINE_POTENTIAL_SPEECH_PII"
+        assert res_dc["qa_status"] == "QUARANTINE_FOREGROUND_VOCAL_BLEED"
         assert "QUARANTINE_ADC_PREAMP_CLIPPING" in res_dc["all_qa_flags"]
         assert "QUARANTINE_MIC_DC_OFFSET_BIAS" in res_dc["all_qa_flags"]
 

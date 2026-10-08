@@ -13,6 +13,7 @@ from sklearn.model_selection import StratifiedGroupKFold
 from ingest_qa import ALL_MODEL_CLASSES, CLASS_MAP, INTERFERER_CLASSES
 
 TARGET_SR = 16000
+SLICES = ["clean", "pocket_occluded", "appliance_noise_3db"]
 EVAL_POCKET_CUTOFF_HZ = 1600.0
 EVAL_NOISE_SNR_DB = 3.0
 TRAIN_FLYWHEEL_CUTOFFS_HZ = (1350.0, 2100.0)
@@ -20,10 +21,20 @@ TRAIN_FLYWHEEL_SNRS_DB = (2.0, 5.5)
 ADJUDICATION_SAMPLE_WEIGHT = 0.35
 
 
+def load_cached_eval_slices() -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Loads the Fold 5 evaluation slices from data/golden_eval/."""
+    slices = {}
+    for s in SLICES:
+        X_s = np.load(f"data/golden_eval/X_{s}.npy")
+        y_s = np.load(f"data/golden_eval/y_{s}.npy")
+        slices[s] = (X_s, y_s)
+    return slices
+
+
 def apply_pocket_occlusion(
     y: np.ndarray, sr: int = TARGET_SR, cutoff_hz: float = EVAL_POCKET_CUTOFF_HZ
 ) -> np.ndarray:
-    """Applies a 4th-order Butterworth low-pass filter modeling fabric/pocket attenuation."""
+    """Applies a 4th-order Butterworth low-pass filter modeling high-frequency acoustic attenuation."""
     b, a = butter(4, cutoff_hz / (0.5 * sr), btype="low")
     return lfilter(b, a, y).astype(np.float32)
 
@@ -242,7 +253,6 @@ def run_consensus_and_drift(
     )
 
     X_train_v1, y_train_v1, w_train_v1 = [], [], []
-    X_train_v2, y_train_v2, w_train_v2 = [], [], []
     eval_slices = {
         "clean": ([], []),
         "pocket_occluded": ([], []),
@@ -250,11 +260,6 @@ def run_consensus_and_drift(
     }
 
     for idx, (y, mel_clean, win_start, label, fold) in enumerate(waveforms):
-        is_disputed = (
-            audit_df.loc[idx, "routing_action"] == "SEND_TO_EXPERT_ADJUDICATION"
-        )
-        flywheel_weight = ADJUDICATION_SAMPLE_WEIGHT if is_disputed else 1.0
-
         if fold == 5:
             noise_clip = eval_noises[idx % len(eval_noises)]
             y_pocket = apply_pocket_occlusion(y, cutoff_hz=EVAL_POCKET_CUTOFF_HZ)
@@ -262,8 +267,14 @@ def run_consensus_and_drift(
 
             for s_name, mel_arr in [
                 ("clean", mel_clean),
-                ("pocket_occluded", wav_to_mel(y_pocket)[0]),
-                ("appliance_noise_3db", wav_to_mel(y_noisy)[0]),
+                (
+                    "pocket_occluded",
+                    wav_to_mel(y_pocket, center_start=win_start)[0],
+                ),
+                (
+                    "appliance_noise_3db",
+                    wav_to_mel(y_noisy, center_start=win_start)[0],
+                ),
             ]:
                 eval_slices[s_name][0].append(mel_arr)
                 eval_slices[s_name][1].append(label)
@@ -272,40 +283,11 @@ def run_consensus_and_drift(
             y_train_v1.append(label)
             w_train_v1.append(1.0)
 
-            noise_pair = (
-                train_noises[idx % len(train_noises)],
-                train_noises[(idx + 7) % len(train_noises)],
-            )
-            occ_views = [
-                wav_to_mel(apply_pocket_occlusion(y, cutoff_hz=fc), center_start=win_start)[0]
-                for fc in TRAIN_FLYWHEEL_CUTOFFS_HZ
-            ]
-            noise_views = [
-                wav_to_mel(mix_real_interferer(y, nc, snr_db=snr), center_start=win_start)[0]
-                for nc, snr in zip(noise_pair, TRAIN_FLYWHEEL_SNRS_DB)
-            ]
-
-            X_train_v2.extend([mel_clean, *occ_views, *noise_views])
-            y_train_v2.extend([label] * 5)
-            w_train_v2.extend([flywheel_weight] * 5)
-
     X_v1_arr, y_v1_arr = np.array(X_train_v1), np.array(y_train_v1)
     w_v1_arr = np.array(w_train_v1, dtype=np.float32)
-    X_v2_arr, y_v2_arr = np.array(X_train_v2), np.array(y_train_v2)
-    w_v2_arr = np.array(w_train_v2, dtype=np.float32)
-
-    os.makedirs("data/golden_eval", exist_ok=True)
-    for name, arr in [
-        ("X_train_v1", X_v1_arr),
-        ("y_train_v1", y_v1_arr),
-        ("w_train_v1", w_v1_arr),
-        ("X_train_v2", X_v2_arr),
-        ("y_train_v2", y_v2_arr),
-        ("w_train_v2", w_v2_arr),
-    ]:
-        np.save(f"data/golden_eval/{name}.npy", arr)
 
     slice_arrays = {}
+    os.makedirs("data/golden_eval", exist_ok=True)
     for s_name, (X_s, y_s) in eval_slices.items():
         X_s_arr, y_s_arr = np.array(X_s), np.array(y_s)
         slice_arrays[s_name] = (X_s_arr, y_s_arr)
@@ -323,7 +305,9 @@ def run_consensus_and_drift(
             "drift_status": status,
         }
         for s_name, (X_s_arr, _) in slice_arrays.items()
-        for hf_psi, nf_psi, comp_psi, status in [compute_spectral_psi(X_v1_arr, X_s_arr)]
+        for hf_psi, nf_psi, comp_psi, status in [
+            compute_spectral_psi(X_v1_arr, X_s_arr)
+        ]
     ]
 
     psi_df = pd.DataFrame(psi_rows)
@@ -333,10 +317,65 @@ def run_consensus_and_drift(
     print(f"[Stage 2B] PSI Drift Audit saved -> {psi_csv}")
     print(psi_df.to_string(index=False))
 
+    drift_triggered = bool(
+        (psi_df["drift_status"] == "CRITICAL_DRIFT_TRIGGER_FLYWHEEL").any()
+    )
+
+    X_train_v2, y_train_v2, w_train_v2 = [], [], []
+    for idx, (y, mel_clean, win_start, label, fold) in enumerate(waveforms):
+        if fold == 5:
+            continue
+        is_disputed = (
+            audit_df.loc[idx, "routing_action"] == "SEND_TO_EXPERT_ADJUDICATION"
+        )
+        flywheel_weight = ADJUDICATION_SAMPLE_WEIGHT if is_disputed else 1.0
+
+        if not drift_triggered:
+            X_train_v2.append(mel_clean)
+            y_train_v2.append(label)
+            w_train_v2.append(flywheel_weight)
+            continue
+
+        noise_pair = (
+            train_noises[idx % len(train_noises)],
+            train_noises[(idx + 7) % len(train_noises)],
+        )
+        occ_views = [
+            wav_to_mel(
+                apply_pocket_occlusion(y, cutoff_hz=fc),
+                center_start=win_start,
+            )[0]
+            for fc in TRAIN_FLYWHEEL_CUTOFFS_HZ
+        ]
+        noise_views = [
+            wav_to_mel(
+                mix_real_interferer(y, nc, snr_db=snr), center_start=win_start
+            )[0]
+            for nc, snr in zip(noise_pair, TRAIN_FLYWHEEL_SNRS_DB)
+        ]
+
+        X_train_v2.extend([mel_clean, *occ_views, *noise_views])
+        y_train_v2.extend([label] * 5)
+        w_train_v2.extend([flywheel_weight] * 5)
+
+    X_v2_arr, y_v2_arr = np.array(X_train_v2), np.array(y_train_v2)
+    w_v2_arr = np.array(w_train_v2, dtype=np.float32)
+
+    for name, arr in [
+        ("X_train_v1", X_v1_arr),
+        ("y_train_v1", y_v1_arr),
+        ("w_train_v1", w_v1_arr),
+        ("X_train_v2", X_v2_arr),
+        ("y_train_v2", y_v2_arr),
+        ("w_train_v2", w_v2_arr),
+    ]:
+        np.save(f"data/golden_eval/{name}.npy", arr)
+
     return {
         "kappa": kappa,
         "audit_df": audit_df,
         "psi_df": psi_df,
+        "drift_triggered": drift_triggered,
         "eval_slices": slice_arrays,
     }
 

@@ -4,11 +4,12 @@
 import argparse
 import os
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 from sklearn.metrics import f1_score
 from sklearn.utils.class_weight import compute_class_weight
 
-from release_gate import load_cached_eval_slices
+from consensus_drift import load_cached_eval_slices
 
 NUM_CLASSES = 5
 
@@ -130,35 +131,61 @@ def train_and_export_version(version_tag: str, epochs: int = 65) -> dict[str, st
     return compile_tflite_suite(model, X_train, version_tag)
 
 
-def run_confounder_ablations() -> dict[str, dict[str, float]]:
-    """Runs step-matched and uniform-weight ablations on Fold 5."""
+def _eval_keras_slices(
+    model: tf.keras.Model, slices: dict[str, tuple[np.ndarray, np.ndarray]]
+) -> dict[str, float]:
+    return {
+        s_name: round(
+            float(
+                f1_score(
+                    y_s,
+                    np.argmax(model.predict(X_s, verbose=0), axis=-1),
+                    average="macro",
+                )
+                * 100.0
+            ),
+            2,
+        )
+        for s_name, (X_s, y_s) in slices.items()
+    }
+
+
+def run_confounder_ablations(
+    out_csv: str = "reports/03_training_and_ablation_metrics.csv",
+) -> dict[str, dict[str, float]]:
+    """Runs step-matched and uniform-weight ablations on Fold 5 and saves Stage 3 metrics."""
     slices = load_cached_eval_slices()
 
-    def _eval_keras(model: tf.keras.Model) -> dict[str, float]:
-        return {
-            s_name: round(
-                float(
-                    f1_score(
-                        y_s,
-                        np.argmax(model.predict(X_s, verbose=0), axis=-1),
-                        average="macro",
-                    )
-                    * 100.0
-                ),
-                2,
-            )
-            for s_name, (X_s, y_s) in slices.items()
-        }
+    configs = [
+        ("v1_baseline", "v1", 65, True),
+        ("step_matched_clean", "v1", 325, False),
+        ("v2_augmentation_only", "v2", 65, False),
+        ("v2_data_flywheel", "v2", 65, True),
+    ]
+    rows = []
+    results = {}
+    for name, suffix, epochs, use_adj in configs:
+        model, X_tr = _fit_candidate(
+            suffix, epochs=epochs, use_adjudication_weights=use_adj
+        )
+        metrics = _eval_keras_slices(model, slices)
+        results[name] = metrics
+        rows.append(
+            {
+                "configuration": name,
+                "train_views": len(X_tr),
+                "epochs": epochs,
+                "adjudication_weighted": use_adj,
+                "f1_clean_%": metrics["clean"],
+                "f1_pocket_occluded_%": metrics["pocket_occluded"],
+                "f1_appliance_noise_3db_%": metrics["appliance_noise_3db"],
+            }
+        )
 
-    m_step, _ = _fit_candidate("v1", epochs=325, use_adjudication_weights=False)
-    res_step = _eval_keras(m_step)
-
-    m_aug, _ = _fit_candidate("v2", epochs=65, use_adjudication_weights=False)
-    res_aug = _eval_keras(m_aug)
-
-    print(f"[Stage 3B] Step-Matched Clean (325 epochs): {res_step}")
-    print(f"[Stage 3B] v2 Augmentation Only (w=1.00):   {res_aug}")
-    return {"step_matched_clean": res_step, "v2_augmentation_only": res_aug}
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+    pd.DataFrame(rows).to_csv(out_csv, index=False)
+    print(f"[Stage 3B] Training & ablation summary saved -> {out_csv}")
+    return results
 
 
 if __name__ == "__main__":

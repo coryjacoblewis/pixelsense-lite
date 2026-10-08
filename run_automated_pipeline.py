@@ -6,7 +6,6 @@ import time
 import consensus_drift
 import ingest_qa
 import release_gate
-import test_pipeline
 import train_quantize
 
 
@@ -23,8 +22,6 @@ def main() -> None:
         eval_slices=stage2_data["eval_slices"],
         enforce_target="v2_data_flywheel",
     )
-
-    test_pipeline.run_verification()
     print(f"[Pipeline] Complete in {time.perf_counter() - t_start:.1f}s.")
 
 

@@ -19,7 +19,7 @@
 
 | Priority | Gate Code | Metric | Threshold |
 | :---: | :--- | :--- | :--- |
-| 1 (P0) | `QUARANTINE_POTENTIAL_SPEECH_PII` | Formant (300–3,400 Hz) energy ratio + 50ms syllabic crest in non-vocal background classes | Ratio > 0.62 & Crest > 2.35 |
+| 1 (P0) | `QUARANTINE_FOREGROUND_VOCAL_BLEED` | Mid-band (300–3,400 Hz) energy ratio + 50ms transient crest in background classes | Ratio > 0.62 & Crest > 2.35 |
 | 2 (P1) | `QUARANTINE_ADC_PREAMP_CLIPPING` | Normalized peak amplitude `max(|x(t)|)` | >= 0.998 |
 | 3 (P1) | `QUARANTINE_EXCESSIVE_DEAD_AIR` | Fraction of 50ms frames exceeding -50 dBFS RMS | < 0.12 |
 | 4 (P1) | `QUARANTINE_MIC_DC_OFFSET_BIAS` | Absolute mean waveform drift `|mean(x)|` | > 0.002 |

@@ -10,7 +10,7 @@ import pandas as pd
 import tensorflow as tf
 from sklearn.metrics import f1_score
 
-SLICES = ["clean", "pocket_occluded", "appliance_noise_3db"]
+from consensus_drift import SLICES, load_cached_eval_slices
 
 MAX_FLASH_KB = 45.0
 MAX_SUBGRAPH_TENSOR_KB = 160.0
@@ -47,14 +47,10 @@ def audit_int8_hardware_compatibility(interpreter: tf.lite.Interpreter) -> dict:
         and any(int(dim) < 0 for dim in t["shape_signature"][1:])
     )
 
-    try:
-        unsupported_op_count = sum(
-            1
-            for op in interpreter._get_ops_details()
-            if op["op_name"] not in ALLOWED_DSP_OPS
-        )
-    except Exception:
-        unsupported_op_count = 0
+    ops_details = interpreter._get_ops_details()
+    unsupported_op_count = sum(
+        1 for op in ops_details if op["op_name"] not in ALLOWED_DSP_OPS
+    )
 
     tensor_bytes = sum(
         int(np.prod(t["shape"])) * np.dtype(t["dtype"]).itemsize
@@ -138,16 +134,6 @@ def evaluate_tflite_binary(
         "bg_fpr_%": bg_fpr_pct,
         "dsp_delegate_ready": hw_audit["dsp_delegate_ready"],
     }
-
-
-def load_cached_eval_slices() -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    """Loads the Fold 5 evaluation slices from data/golden_eval/."""
-    slices = {}
-    for s in SLICES:
-        X_s = np.load(f"data/golden_eval/X_{s}.npy")
-        y_s = np.load(f"data/golden_eval/y_{s}.npy")
-        slices[s] = (X_s, y_s)
-    return slices
 
 
 def run_release_gate(

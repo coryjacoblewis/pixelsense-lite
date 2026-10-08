@@ -122,7 +122,7 @@ def audit_wav_signal(filepath: str, category: str) -> dict:
     )
 
     speech_band_ratio, envelope_crest = compute_speech_formant_metrics(x, sr)
-    # Screen non-vocal background/interferer recordings for human vocal bleed / PII
+    # Screen background/interferer recordings for transient mid-band or vocal bleed
     has_vocal_bleed = (
         category in INTERFERER_CLASSES
         and speech_band_ratio > 0.62
@@ -131,7 +131,7 @@ def audit_wav_signal(filepath: str, category: str) -> dict:
 
     flags = []
     if has_vocal_bleed:
-        flags.append("QUARANTINE_POTENTIAL_SPEECH_PII")
+        flags.append("QUARANTINE_FOREGROUND_VOCAL_BLEED")
     if peak_amp >= 0.998:
         flags.append("QUARANTINE_ADC_PREAMP_CLIPPING")
     if active_ratio < 0.12:

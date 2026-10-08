@@ -23,21 +23,21 @@
 
 | Release Candidate | Quant | Flash (<=45 KB) | Subgraph Tensors (<=160 KB) | INT8 Compliance (100%) | p99 Latency (ms) | Clean F1 (>=65%) | Pocket F1 (>=58%) | +3dB Noise F1 (>=52%) | BG FPR (<=15%) | Gate Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `v1_baseline` | `fp32` | 64.08 KB | 587.94 KB | 0.0% | 0.350 ms | 83.99% | 50.59% | 35.71% | 37.50% | BLOCKED (HW + SLICE) |
-| `v1_baseline` | `fp16` | 36.04 KB | 617.76 KB | 0.0% | 0.370 ms | 83.99% | 50.59% | 35.71% | 37.50% | BLOCKED (HW + SLICE) |
-| `v1_baseline` | `int8` | 22.98 KB | 147.33 KB | 100.0% | 0.133 ms | 83.99% | 50.59% | 35.71% | 37.50% | BLOCKED (SLICE F1) |
-| `v2_data_flywheel` | `fp32` | 64.08 KB | 587.94 KB | 0.0% | 0.446 ms | 90.50% | 90.50% | 75.28% | 12.50% | BLOCKED (HW) |
-| `v2_data_flywheel` | `fp16` | 36.04 KB | 617.76 KB | 0.0% | 0.358 ms | 90.50% | 90.50% | 75.28% | 12.50% | BLOCKED (HW) |
-| **`v2_data_flywheel`** | **`int8`** | **22.98 KB** | **147.33 KB** | **100.0%** | **0.171 ms** | **90.50%** | **90.50%** | **72.88%** | **12.50%** | **SHIP (PASS)** |
+| `v1_baseline` | `fp32` | 64.08 KB | 587.94 KB | 0.0% | 0.329 ms | 83.99% | 45.91% | 38.24% | 37.50% | BLOCKED (HW + SLICE) |
+| `v1_baseline` | `fp16` | 36.04 KB | 617.76 KB | 0.0% | 0.317 ms | 83.99% | 45.91% | 38.24% | 37.50% | BLOCKED (HW + SLICE) |
+| `v1_baseline` | `int8` | 22.98 KB | 147.33 KB | 100.0% | 0.120 ms | 83.99% | 45.91% | 38.24% | 37.50% | BLOCKED (SLICE F1) |
+| `v2_data_flywheel` | `fp32` | 64.08 KB | 587.94 KB | 0.0% | 0.329 ms | 90.50% | 90.50% | 77.41% | 12.50% | BLOCKED (HW) |
+| `v2_data_flywheel` | `fp16` | 36.04 KB | 617.76 KB | 0.0% | 0.318 ms | 90.50% | 90.50% | 77.41% | 12.50% | BLOCKED (HW) |
+| **`v2_data_flywheel`** | **`int8`** | **22.98 KB** | **147.33 KB** | **100.0%** | **0.112 ms** | **90.50%** | **90.50%** | **75.28%** | **12.50%** | **SHIP (PASS)** |
 
-### Ablation Results (`python train_quantize.py --run-ablations`)
+### Ablation Results ([`reports/03_training_and_ablation_metrics.csv`](./reports/03_training_and_ablation_metrics.csv))
 
 | Configuration (Folds 1–4 -> Held-Out Fold 5) | Train Views | Epochs (Steps) | Adjudication Weight | Clean F1 | Pocket F1 | +3dB Noise F1 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 1. `v1_baseline` (Clean Only) | 181 | 65 (780) | Uniform (1.00) | 83.99% | 50.59% | 35.71% |
-| 2. Step-Matched Clean (5x Epochs, No Augmentation) | 181 | 325 (3,900) | Uniform (1.00) | 81.97% | 67.04% | 24.07% |
-| 3. `v2` Augmentation Only (Uniform Sample Weights) | 905 | 65 (3,705) | Uniform (1.00) | 82.03% | 86.07% | 76.96% |
-| 4. Full `v2_data_flywheel` (FP32 / INT8) | 905 | 65 (3,705) | 0.35 on 4 disputed | 90.50% | 90.50% | 75.28% / 72.88% |
+| 1. `v1_baseline` (Clean Only) | 181 | 65 (780) | Uniform (1.00) | 83.99% | 45.91% | 38.24% |
+| 2. Step-Matched Clean (5x Epochs, No Augmentation) | 181 | 325 (3,900) | Uniform (1.00) | 81.97% | 69.48% | 26.77% |
+| 3. `v2` Augmentation Only (Uniform Sample Weights) | 905 | 65 (3,705) | Uniform (1.00) | 82.03% | 83.21% | 77.27% |
+| 4. Full `v2_data_flywheel` (FP32 / INT8) | 905 | 65 (3,705) | 0.35 on 4 disputed | 90.50% | 90.50% | 77.41% / 75.28% |
 
 ---
 
@@ -51,7 +51,7 @@
 | `QUARANTINE_ADC_PREAMP_CLIPPING` | 76 | 23.8% | Normalized peak amplitude >= 0.998 |
 | `QUARANTINE_MIC_DC_OFFSET_BIAS` | 10 | 3.1% | Mean signal drift > 0.002 |
 | `QUARANTINE_EXCESSIVE_DEAD_AIR` | 2 | 0.6% | < 12% active 50ms frames above -50 dBFS |
-| `QUARANTINE_POTENTIAL_SPEECH_PII` | 2 | 0.6% | Background noise clips with > 62% 300–3,400 Hz energy & crest > 2.35 |
+| `QUARANTINE_FOREGROUND_VOCAL_BLEED` | 2 | 0.6% | Background noise clips with > 62% 300–3,400 Hz energy & crest > 2.35 |
 
 ### Stage 2A: Group-Isolated Out-of-Fold Teacher Consensus ([`reports/02_label_consensus_and_kappa_audit.csv`](./reports/02_label_consensus_and_kappa_audit.csv))
 
@@ -70,8 +70,8 @@
 | Held-Out Evaluation Slice (Fold 5) | Eval Clips | High-Freq Band PSI | Noise-Floor PSI | Composite PSI | Threshold | Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | `clean` (Reference Audio) | 49 | 0.0642 | 0.0539 | 0.0642 | 0.2500 | `STABLE` |
-| `pocket_occluded` (1,600 Hz Butterworth LP) | 49 | 2.0045 | 0.3739 | 2.0045 | 0.2500 | `CRITICAL_DRIFT_TRIGGER_FLYWHEEL` |
-| `appliance_noise_3db` (+3 dB Domestic Noise) | 49 | 0.7587 | 0.8134 | 0.8134 | 0.2500 | `CRITICAL_DRIFT_TRIGGER_FLYWHEEL` |
+| `pocket_occluded` (1,600 Hz Butterworth LP) | 49 | 1.9688 | 0.3690 | 1.9688 | 0.2500 | `CRITICAL_DRIFT_TRIGGER_FLYWHEEL` |
+| `appliance_noise_3db` (+3 dB Domestic Noise) | 49 | 0.7213 | 0.7961 | 0.7961 | 0.2500 | `CRITICAL_DRIFT_TRIGGER_FLYWHEEL` |
 
 ### ARM64 C++ Operator Telemetry ([`reports/05_arm64_op_profile_int8.csv`](./reports/05_arm64_op_profile_int8.csv), [`reports/05_arm64_hardware_telemetry_int8.txt`](./reports/05_arm64_hardware_telemetry_int8.txt))
 
