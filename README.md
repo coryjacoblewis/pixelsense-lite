@@ -12,6 +12,19 @@
 3. **Training & Quantization ([`train_quantize.py`](./train_quantize.py))**: Trains a compact 2D CNN and exports `fp32`, `fp16`, and full-integer `int8` `.tflite` flatbuffers.
 4. **Release Gate ([`release_gate.py`](./release_gate.py))**: Verifies subgraph INT8 operator compliance, model footprint, and multi-slice macro F1 before approving a release candidate.
 
+```mermaid
+flowchart LR
+    A["Raw Corpus (320 WAVs)"] --> B["Stage 1: Signal QA (ingest_qa.py)"]
+    B -->|"90 Quarantined (28.1%)"| Q["Quarantine Log"]
+    B -->|"230 Clean (Folds 1-4: 181, Fold 5: 49)"| C["Stage 2: OOF Consensus & PSI Drift (consensus_drift.py)"]
+    C -->|"Clean Only (w = 1.0)"| V1["v1_baseline INT8 (22.98 KB)"]
+    C -->|"PSI > 0.25 Trigger + OOF Weights (w = 0.35) + 5x Aug"| V2["v2_data_flywheel INT8 (22.98 KB)"]
+    V1 --> G["Stage 4: ARM64 Release Gate (release_gate.py)"]
+    V2 --> G
+    G -->|"Pocket F1: 45.9% / +3dB F1: 38.2%"| R1["v1: BLOCKED"]
+    G -->|"Pocket F1: 90.5% / +3dB F1: 75.3%"| R2["v2: SHIP (PASS)"]
+```
+
 ---
 
 ## Release Gate Scorecard (`v1_baseline` vs. `v2_data_flywheel`)
