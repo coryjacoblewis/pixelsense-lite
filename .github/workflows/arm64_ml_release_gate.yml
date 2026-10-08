@@ -53,7 +53,7 @@ jobs:
             --use_xnnpack=false \
             --enable_op_profiling=true \
             --profiling_output_csv_file=reports/05_arm64_op_profile_int8.csv \
-            | tee -a reports/05_arm64_hardware_telemetry_int8.txt
+            2>&1 | tee -a reports/05_arm64_hardware_telemetry_int8.txt
 
           echo -e "\n=== PASS 2: NATIVE ARM64 XNNPACK DELEGATE PROFILE (1 Thread, --use_xnnpack=true) ===" >> reports/05_arm64_hardware_telemetry_int8.txt
           ./benchmark_model \
@@ -63,7 +63,7 @@ jobs:
             --num_runs=200 \
             --use_xnnpack=true \
             --enable_op_profiling=true \
-            | tee -a reports/05_arm64_hardware_telemetry_int8.txt
+            2>&1 | tee -a reports/05_arm64_hardware_telemetry_int8.txt
 
       - name: Verify ARM64 Telemetry & Pipeline Invariants
         run: python 05_verify_pipeline.py
