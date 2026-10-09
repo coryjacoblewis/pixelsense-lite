@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import warnings
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -11,10 +12,17 @@ from sklearn.utils.class_weight import compute_class_weight
 
 from consensus_drift import SLICES, load_cached_eval_slices, load_cached_val_slices
 
+warnings.filterwarnings(
+    "ignore",
+    message=r".*tf\.lite\.Interpreter is deprecated.*",
+    category=UserWarning,
+)
+
 NUM_CLASSES = 5
 DEFAULT_EPOCHS = 70
 ABLAT_SEEDS = (42, 43, 44, 45, 46)
 VAL_SWA_MAX_BG_FPR_PCT = 16.0  # <= 3 / 19 background clips on Fold 4 validation
+VAL_CALIB_TARGET_BG_FPR_PCT = 10.6  # <= 2 / 19 background clips on Fold 4 validation
 _TRAINED_MODEL_CACHE: dict[tuple[str, int, bool, bool, int], tuple[tf.keras.Model, np.ndarray]] = {}
 
 
@@ -142,7 +150,10 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
     Records epoch-end weight snapshots over the final ~25% of training epochs and averages
     those that satisfy the Fold 4 validation background FPR gate (`<= 16.0%`, i.e., `<= 3/19`
     background clips), or the top-3 lowest-FPR late checkpoints if fewer than 3 qualify.
-    This suppresses single-epoch mini-batch decision-boundary jitter without touching Fold 5.
+    When `calibrate_prior=True`, also applies a constrained Fold 4 validation output-bias
+    calibration on the final Dense layer to enforce a tighter Fold 4 background FPR guard
+    (`<= 10.6%`, i.e., `<= 2/19` clips) and recover any target class collapsed under `+3 dB`
+    appliance noise without touching Fold 5.
     """
 
     def __init__(
@@ -150,12 +161,14 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
         val_slices: dict[str, tuple[np.ndarray, np.ndarray]],
         total_epochs: int,
         min_Fallback_k: int = 3,
+        calibrate_prior: bool = True,
     ) -> None:
         super().__init__()
         self.val_slices = val_slices
         self.record_start_ep = max(5, int(total_epochs * 0.75))
         self.swa_start_ep = max(5, int(total_epochs * 0.78))
         self.min_fallback_k = min_Fallback_k
+        self.calibrate_prior = calibrate_prior
         self.snapshots: list[tuple[int, list[np.ndarray], float, float]] = []
 
     def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
@@ -168,6 +181,96 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
         mean_vf1 = float(np.mean(list(vf1.values())))
         weights_copy = [w.copy() for w in self.model.get_weights()]
         self.snapshots.append((ep, weights_copy, mean_vf1, max_vfpr))
+
+    def _calibrate_output_bias_on_fold4(self) -> None:
+        logits_model = tf.keras.Model(
+            inputs=self.model.inputs, outputs=self.model.layers[-2].output
+        )
+        W_last, b_last = self.model.layers[-1].get_weights()
+        val_logits = {
+            s: (np.asarray(logits_model(X_s, training=False)) @ W_last + b_last, y_s)
+            for s, (X_s, y_s) in self.val_slices.items()
+        }
+
+        def eval_with_bias(
+            b_vec: np.ndarray,
+        ) -> tuple[dict[str, float], dict[str, float], np.ndarray]:
+            f1s, fprs = {}, {}
+            per_cls_noise = np.zeros(NUM_CLASSES, dtype=np.float32)
+            for s, (L, y_s) in val_logits.items():
+                preds = np.argmax(L - b_last + b_vec, axis=-1)
+                f1s[s] = float(
+                    f1_score(y_s, preds, average="macro", zero_division=0) * 100.0
+                )
+                fprs[s] = float(np.mean(preds[y_s == 0] != 0) * 100.0)
+                if s == "appliance_noise_3db":
+                    per_cls_noise = np.asarray(
+                        f1_score(y_s, preds, average=None, zero_division=0) * 100.0,
+                        dtype=np.float32,
+                    )
+            return f1s, fprs, per_cls_noise
+
+        b_cur = b_last.copy()
+        base_f1s, base_fprs, base_cls_n = eval_with_bias(b_cur)
+
+        if max(base_fprs.values()) > VAL_CALIB_TARGET_BG_FPR_PCT:
+            base_key0 = (
+                max(base_fprs.values()) <= VAL_CALIB_TARGET_BG_FPR_PCT,
+                max(base_fprs.values()) <= VAL_SWA_MAX_BG_FPR_PCT,
+                -round(max(base_fprs.values()), 2),
+                round(min(base_f1s.values()), 2),
+            )
+            valid0 = []
+            for db0 in np.linspace(0.05, 1.5, 30, dtype=np.float32):
+                cand_b = b_cur.copy()
+                cand_b[0] = b_cur[0] + db0
+                f1s, fprs, _ = eval_with_bias(cand_b)
+                if (
+                    min(f1s.values()) >= 58.0
+                    and np.mean(list(f1s.values()))
+                    >= np.mean(list(base_f1s.values())) - 2.0
+                ):
+                    key0 = (
+                        max(fprs.values()) <= VAL_CALIB_TARGET_BG_FPR_PCT,
+                        max(fprs.values()) <= VAL_SWA_MAX_BG_FPR_PCT,
+                        -round(max(fprs.values()), 2),
+                        round(min(f1s.values()), 2),
+                    )
+                    valid0.append((key0, float(db0)))
+            if valid0:
+                best_key0 = max(v[0] for v in valid0)
+                if best_key0 > base_key0:
+                    plateau0 = [v[1] for v in valid0 if v[0] == best_key0]
+                    b_cur[0] = b_cur[0] + float(plateau0[len(plateau0) // 2])
+                    base_f1s, base_fprs, base_cls_n = eval_with_bias(b_cur)
+
+        fpr_cap = max(VAL_CALIB_TARGET_BG_FPR_PCT, max(base_fprs.values()))
+        for c in range(1, NUM_CLASSES):
+            if base_cls_n[c] < 35.0:
+                validc = []
+                for dbc in np.linspace(0.05, 0.90, 18, dtype=np.float32):
+                    cand_b = b_cur.copy()
+                    cand_b[c] = b_cur[c] + dbc
+                    f1s, fprs, _ = eval_with_bias(cand_b)
+                    if (
+                        max(fprs.values()) <= fpr_cap
+                        and fprs["appliance_noise_3db"]
+                        <= base_fprs["appliance_noise_3db"]
+                        and fprs["pocket_occluded"] <= base_fprs["pocket_occluded"]
+                        and f1s["clean"] >= base_f1s["clean"] - 2.5
+                        and f1s["pocket_occluded"] >= base_f1s["pocket_occluded"] - 1.5
+                    ):
+                        validc.append((round(f1s["appliance_noise_3db"], 2), float(dbc)))
+                if validc:
+                    best_nf1 = max(v[0] for v in validc)
+                    if best_nf1 > round(base_f1s["appliance_noise_3db"], 2):
+                        plateauc = [v[1] for v in validc if v[0] == best_nf1]
+                        b_cur[c] = b_cur[c] + float(
+                            min(plateauc[-1], plateauc[0] + 0.30)
+                        )
+                        base_f1s, base_fprs, base_cls_n = eval_with_bias(b_cur)
+
+        self.model.layers[-1].set_weights([W_last, b_cur.astype(np.float32)])
 
     def on_train_end(self, logs: dict | None = None) -> None:
         del logs
@@ -197,6 +300,8 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
             for layer_idx in range(len(chosen[0]))
         ]
         self.model.set_weights(avg_weights)
+        if self.calibrate_prior:
+            self._calibrate_output_bias_on_fold4()
 
 
 def _fit_candidate(
@@ -221,7 +326,11 @@ def _fit_candidate(
     )
     val_slices = load_cached_val_slices()
     model = build_embedded_cnn(seed=seed)
-    swa_cb = _Fold4ValSWACallback(val_slices=val_slices, total_epochs=epochs)
+    swa_cb = _Fold4ValSWACallback(
+        val_slices=val_slices,
+        total_epochs=epochs,
+        calibrate_prior=use_empirical_prior,
+    )
     model.fit(
         X_train,
         y_train,

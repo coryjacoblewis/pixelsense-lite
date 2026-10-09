@@ -7,12 +7,19 @@ import os
 import re
 import sys
 import time
+import warnings
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sklearn.metrics import f1_score
 
 from consensus_drift import SLICES, load_cached_eval_slices, load_cached_eval_sources
+
+warnings.filterwarnings(
+    "ignore",
+    message=r".*tf\.lite\.Interpreter is deprecated.*",
+    category=UserWarning,
+)
 
 MAX_FLASH_KB = 45.0
 MAX_SUBGRAPH_TENSOR_KB = 160.0
