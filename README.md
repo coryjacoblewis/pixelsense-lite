@@ -3,18 +3,18 @@
 [![ARM64 Release Gate](https://github.com/coryjacoblewis/pixelsense-lite/actions/workflows/arm64_ml_release_gate.yml/badge.svg)](https://github.com/coryjacoblewis/pixelsense-lite/actions/workflows/arm64_ml_release_gate.yml)
 [![Inspect v2 INT8 Subgraph in Netron](https://img.shields.io/badge/Netron-Inspect_INT8_.tflite_Subgraph-blue?logo=tensorflow)](https://netron.app/?url=https://raw.githubusercontent.com/coryjacoblewis/pixelsense-lite/main/models/v2_robust_augmented/model_int8.tflite)
 
-**PixelSense-Lite** is an end-to-end edge-audio ML pipeline that trains, quantizes, and release-gates a **23 KB full-integer `INT8` `.tflite` model** for 5-class sound recognition (`coughing`, `snoring`, `siren`, `crying_baby`, `background_noise`) on ARM64 hardware.
+**PixelSense-Lite** is an end-to-end edge-audio ML pipeline that trains, quantizes, and release-gates a **23 KB 8-bit integer (`INT8`) `.tflite` model** for 5-class sound recognition (`coughing`, `snoring`, `siren`, `crying_baby`, `background_noise`) on ARM64 processors.
 
 ## The Problem & Result
 
-Models trained only on clean audio (`v1_baseline`) break down when a device is muffled inside a pocket or placed near loud household appliances, triggering false alarms up to **88%** of the time on background noise. PixelSense-Lite (`v2_robust_augmented`) fixes this without increasing model size or latency:
+Models trained only on clean studio audio (`v1_baseline`) fail in real-world conditions—such as when a phone is muffled inside a pocket or placed near a loud appliance—and trigger false alarms up to **88%** of the time on everyday background noise. PixelSense-Lite (`v2_robust_augmented`) fixes this without increasing model size or latency:
 
 | Metric (Locked Fold 5 Test Set, `INT8` `.tflite`) | `v1_baseline` (Clean Train) | `v2_robust_augmented` (Ours) | Improvement | Release Requirement |
 | :--- | :---: | :---: | :---: | :---: |
-| **Clean Audio F1** | 80.69% | **86.70%** | `+6.01%` | `>= 65.0%` |
-| **Pocket-Muffled Audio F1** (1,600 Hz low-pass) | 46.62% | **82.62%** | **`+36.00%`** | `>= 58.0%` |
-| **Noisy Room Audio F1** (+3 dB appliance SNR) | 24.33% | **55.21%** | **`+30.88%`** | `>= 52.0%` |
-| **Worst-Case Background False-Positive Rate** | 88.00% | **8.00%** | **`-80.00%`** | `<= 15.0%` |
+| **Clean Audio Accuracy (Macro F1)** | 80.69% | **86.70%** | `+6.01%` | `>= 65.0%` |
+| **Pocket-Muffled Accuracy (Macro F1)** (1,600 Hz low-pass) | 46.62% | **82.62%** | **`+36.00%`** | `>= 58.0%` |
+| **Noisy Room Accuracy (Macro F1)** (+3 dB appliance noise) | 24.33% | **55.21%** | **`+30.88%`** | `>= 52.0%` |
+| **False-Alarm Rate on Background Noise (Max BG FPR)** | 88.00% | **8.00%** | **`-80.00%`** | `<= 15.0%` |
 | **Model Binary Size / ARM64 Latency (p95)** | 22.98 KB / — | **22.98 KB / 177 µs** | Same footprint | `<= 45 KB` / `<= 1.0 ms` |
 | **Release Gate Verdict** | **BLOCKED** | **SHIP (PASS)** | — | All gates passed |
 
@@ -36,7 +36,7 @@ python run_automated_pipeline.py                  # Full rebuild (downloads ESC-
 
 ## How the 4-Stage Pipeline Works
 
-Using a 320-clip subset of [ESC-50](https://github.com/karolpiczak/ESC-50), the pipeline enforces strict source-recording isolation (`src_file`) across **Folds 1–3** (Train, `N=140`), **Fold 4** (Validation & Shift Audit, `N=43`), and **Fold 5** (Locked Test, `N=50` across 42 sources):
+Using a 320-clip subset of [ESC-50](https://github.com/karolpiczak/ESC-50), the pipeline enforces strict source-recording isolation (`src_file`) across **Folds 1–3** (Train, `N=140`), **Fold 4** (Validation & Shift Audit, `N=43`), and **Fold 5** (Locked Test, `N=50` across 42 sources) so clips cut from the same original Freesound recording never appear in both training and test sets (zero data leakage):
 
 ```mermaid
 flowchart LR
@@ -49,18 +49,18 @@ flowchart LR
     S -->|"Locked Fold 5 Test (N=50)"| G["Stage 4: Release Gate (release_gate.py)"]
     V1 --> G
     V2 --> G
-    G -->|"Fails Stress F1 & BG FPR (88%)"| R1["v1: BLOCKED"]
+    G -->|"46.6% Muffled F1 / 88% False Alarms"| R1["v1: BLOCKED"]
     G -->|"Passes All Quality & HW Gates"| R2["v2: SHIP (PASS)"]
 ```
 
 | Stage | Script | What It Does | Output Artifact |
 | :---: | :--- | :--- | :--- |
 | **1. Signal QA** | [`ingest_qa.py`](./ingest_qa.py) | Screens raw WAV files for physical audio defects (clipping saturation, DC offset, dead air). Quarantines 87 bad clips; passes 233 clean clips. | [`reports/01_signal_qa_report.csv`](./reports/01_signal_qa_report.csv) |
-| **2. Drift & Label Audit** | [`consensus_drift.py`](./consensus_drift.py) | Down-weights likely mislabeled training clips (`w = 0.35`) via out-of-fold classifier disagreement, and measures spectral drift (PSI) on Fold 4 to trigger 5x acoustic augmentation. | [`reports/02_oof_label_noise_audit.csv`](./reports/02_oof_label_noise_audit.csv), [`reports/02_psi_spectral_drift_audit.csv`](./reports/02_psi_spectral_drift_audit.csv) |
-| **3. Train & Quantize** | [`train_quantize.py`](./train_quantize.py) | Trains a compact 2D CNN on 64x64 Log-Mel spectrograms and exports `fp32`, `fp16`, and full-integer `int8` `.tflite` models. Runs 5-seed ablations. | [`reports/03_training_and_ablation_metrics.csv`](./reports/03_training_and_ablation_metrics.csv) |
-| **4. Release Gate** | [`release_gate.py`](./release_gate.py) | Audits `.tflite` memory/operators, verifies SHA-256 ARM64 XNNPACK latency, and blocks any candidate that fails Fold 5 F1 or false-positive thresholds. | [`reports/04_release_gate_scorecard.md`](./reports/04_release_gate_scorecard.md) |
+| **2. Drift & Label Audit** | [`consensus_drift.py`](./consensus_drift.py) | Flags and down-weights likely mislabeled training clips (`w = 0.35`), and measures frequency drift (PSI) on Fold 4 to trigger 5x audio augmentation. | [`reports/02_oof_label_noise_audit.csv`](./reports/02_oof_label_noise_audit.csv), [`reports/02_psi_spectral_drift_audit.csv`](./reports/02_psi_spectral_drift_audit.csv) |
+| **3. Train & Quantize** | [`train_quantize.py`](./train_quantize.py) | Trains a compact 2D CNN on 64x64 Log-Mel spectrograms and exports `fp32`, `fp16`, and 8-bit integer (`int8`) `.tflite` models across 5 random seeds. | [`reports/03_training_and_ablation_metrics.csv`](./reports/03_training_and_ablation_metrics.csv) |
+| **4. Release Gate** | [`release_gate.py`](./release_gate.py) | Audits `.tflite` memory/operators, verifies SHA-256 ARM64 XNNPACK speed, and blocks any candidate failing Fold 5 accuracy or false-alarm limits. | [`reports/04_release_gate_scorecard.md`](./reports/04_release_gate_scorecard.md) |
 
-> **Detailed Reference Docs:** [Audio Corpus & Signal QA SOP (`docs/data_collection_sop.md`)](./docs/data_collection_sop.md) | [Model & Data Cards (`docs/model_and_data_cards.md`)](./docs/model_and_data_cards.md)
+> **Reference Docs:** [Audio Corpus & Signal QA SOP (`docs/data_collection_sop.md`)](./docs/data_collection_sop.md) | [Model & Data Cards (`docs/model_and_data_cards.md`)](./docs/model_and_data_cards.md)
 
 ---
 
@@ -75,10 +75,10 @@ flowchart LR
 | `QUARANTINE_DC_OFFSET` | 10 | 3.1% | Mean waveform offset `> 0.002` |
 | `QUARANTINE_EXCESSIVE_DEAD_AIR` | 2 | 0.6% | `< 12%` active 50ms frames above `-50 dBFS` |
 
-### Stage 2: Label-Noise Down-Weighting & Spectral Shift Audit
+### Stage 2: Mislabeled-Clip Detection & Acoustic Drift Audit
 
-- **Out-of-Fold Label Audit ([`reports/02_oof_label_noise_audit.csv`](./reports/02_oof_label_noise_audit.csv)):** A source-grouped random forest agrees with ESC-50 labels on **88.6%** of Folds 1–3 training clips (`124/140`, κ = `0.822`). 4 high-confidence disputed clips (`1-187207-A-20.wav`, `2-43802-A-42.wav`, `3-124795-A-28.wav`, `3-51731-A-42.wav`) are down-weighted (`w = 0.35`) rather than discarded.
-- **Spectral Shift Audit ([`reports/02_psi_spectral_drift_audit.csv`](./reports/02_psi_spectral_drift_audit.csv)):** Compares Fold 4 validation slices against Folds 1–3 clean training audio using Population Stability Index (PSI) across high frequencies (`> 2.0 kHz`) and passband dynamic range (`< 1.5 kHz`):
+- **Catching Mislabeled Training Clips ([`reports/02_oof_label_noise_audit.csv`](./reports/02_oof_label_noise_audit.csv)):** Cross-validation (`StratifiedGroupKFold` by `src_file`, κ = `0.822`, `88.6%` agreement) flags 4 training clips where the audio conflicts with the ESC-50 label (`1-187207-A-20.wav`, `2-43802-A-42.wav`, `3-124795-A-28.wav`, `3-51731-A-42.wav`) and lowers their training weight (`w = 0.35`) so noisy labels do not corrupt the model.
+- **Detecting Muffled & Noisy Audio Drift ([`reports/02_psi_spectral_drift_audit.csv`](./reports/02_psi_spectral_drift_audit.csv)):** Measures how much pocket muffling or appliance noise shifts the audio spectrum compared to clean training audio using Population Stability Index (`PSI`). Because both stress slices exceed the `0.25` drift threshold, the pipeline automatically enables 5x audio augmentation:
 
 | Fold 4 Validation Slice | Clips | High-Freq PSI (`>2.0 kHz`) | Passband Dynamic-Range PSI (`<1.5 kHz`) | Max PSI | Threshold | Action |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
@@ -88,7 +88,7 @@ flowchart LR
 
 ### Stage 3: Ablation Study — Why `v2_robust_augmented` Works ([`reports/03_training_and_ablation_metrics.csv`](./reports/03_training_and_ablation_metrics.csv))
 
-Training with `class_weight='balanced'` (`Balanced 1/K`) artificially forces a uniform 20% class prior over a dataset that is naturally 53.6% `background_noise`, causing high false-alarm rates (25%–97% BG FPR). Combining **5x acoustic augmentation**, **empirical class priors**, and **OOF noisy-label down-weighting (`w=0.35`)** achieves high F1 while keeping background false positives below the `15.0%` ceiling across 5 random seeds:
+Because over half of the training corpus is background noise (`53.6%`), standard equal-class weighting (`Balanced 1/K`) causes the model to over-predict rare target events and triggers **25%–97% false-alarm rates** (`BG FPR`). Training on the **natural class mix (`Empirical Prior`)** with **5x audio augmentation** and **noisy-label down-weighting (`w=0.35`)** cuts false alarms to **`8.0%`** (`13.6%` mean across 5 independent training seeds):
 
 | Configuration (Trained on Folds 1–3) | Train Views / Epochs | Weighting & Prior | Seed-42 INT8 Clean / Pocket / +3dB F1 (Mean) | Seed-42 INT8 Max BG FPR | 5-Seed INT8 Mean F1 ± Std | 5-Seed INT8 Max BG FPR ± Std |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -101,9 +101,9 @@ Training with `class_weight='balanced'` (`Balanced 1/K`) artificially forces a u
 
 ### Stage 4: Full Release Gate Scorecard & Hardware Telemetry ([`reports/04_release_gate_scorecard.md`](./reports/04_release_gate_scorecard.md))
 
-#### 1. `.tflite` Precision & Hardware Gate Comparison
+#### 1. `.tflite` Quantization & Memory Gate
 
-Only the full-integer `INT8` build of `v2_robust_augmented` satisfies both the embedded hardware limits (`<= 45 KB` binary, `<= 160 KB` tensor descriptors, `100%` integer tensors) and the Fold 5 quality thresholds:
+Quantizing from 32-bit float (`fp32`) to 8-bit integer (`int8`) shrinks the model binary by **2.8x** (`64.08 KB -> 22.98 KB`) and subgraph tensor RAM by **4.0x** (`587.94 KB -> 147.33 KB`), making `v2_robust_augmented` (`int8`) the only build that passes all hardware and accuracy gates:
 
 | Candidate | Quant | Binary (`<=45 KB`) | Subgraph Tensors (`<=160 KB`) | Peak Op I/O (`<=100 KB`) | INT Tensors (`100%`) | Host p99 (`<=5.0 ms`) | Clean / Pocket / +3dB F1 | Pooled / Max BG FPR (`<=15%`) | Gate Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
@@ -114,7 +114,9 @@ Only the full-integer `INT8` build of `v2_robust_augmented` satisfies both the e
 | `v2_robust_augmented` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.317 ms | 90.35% / 82.62% / 55.21% | 2.67% / 4.00% | BLOCKED (HW) |
 | **`v2_robust_augmented`** | **`int8`** | **22.98 KB** | **147.33 KB** | **80.00 KB** | **100.0%** | **0.123 ms** | **86.70% / 82.62% / 55.21%** | **4.00% / 8.00%** | **SHIP (PASS)** |
 
-#### 2. Paired Bootstrap 95% Confidence Intervals (Fold 5: `N = 50` across 42 sources, 1,000 Replicates)
+#### 2. Statistical Confidence (1,000-Run Source-Clustered Bootstrap on Fold 5)
+
+Resampling Fold 5 across its 42 source recordings confirms that the **`+36.00%`** pocket-muffled F1 gain and **`+30.88%`** noisy-room F1 gain are statistically significant (95% confidence intervals exclude zero):
 
 | Locked Fold 5 Slice | `v1_baseline` INT8 (95% CI) | `v2_robust_augmented` INT8 (95% CI) | Paired ΔF1 (`v2 - v1`) | Paired ΔF1 95% Bootstrap CI | `v1` BG FPR | `v2` BG FPR |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -122,7 +124,9 @@ Only the full-integer `INT8` build of `v2_robust_augmented` satisfies both the e
 | `pocket_occluded` (1,600 Hz LP) | 46.62% `[33.46%, 74.41%]` | 82.62% `[72.76%, 96.34%]` | **`+36.00%`** | **`[+14.64%, +48.58%]`** | 88.00% | **0.00%** |
 | `appliance_noise_3db` (+3 dB SNR) | 24.33% `[14.05%, 32.45%]` | 55.21% `[43.58%, 68.05%]` | **`+30.88%`** | **`[+18.40%, +45.15%]`** | 4.00% | **4.00%** |
 
-#### 3. Native ARM64 Operator Profile ([`reports/05_arm64_op_profile_int8.csv`](./reports/05_arm64_op_profile_int8.csv), [`reports/05_arm64_hardware_telemetry_int8.txt`](./reports/05_arm64_hardware_telemetry_int8.txt))
+#### 3. Native ARM64 Operator Speed ([`reports/05_arm64_op_profile_int8.csv`](./reports/05_arm64_op_profile_int8.csv), [`reports/05_arm64_hardware_telemetry_int8.txt`](./reports/05_arm64_hardware_telemetry_int8.txt))
+
+Enabling the ARM64 XNNPACK SIMD delegate cuts single-thread inference latency by **42.7%** (`310 µs -> 177 µs` p95)—more than **5x faster** than the `1.0 ms` real-time budget:
 
 ```mermaid
 flowchart LR
