@@ -31,8 +31,11 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run End-to-End Ingestion QA, Drift Audit, Training & Slice Gate
-        run: python run_automated_pipeline.py
+      - name: Run Stages 1-3 (Signal QA, Fold 4 Shift Audit & Folds 1-3 Training)
+        run: |
+          python ingest_qa.py
+          python consensus_drift.py
+          python train_quantize.py --version all --run-ablations
 
       - name: Download Prebuilt ARM64 LiteRT Benchmark Binary
         run: |
@@ -43,13 +46,15 @@ jobs:
 
       - name: Capture ARM64 Operator-Level Hardware Telemetry (Raw CPU vs. XNNPACK Delegate)
         run: |
+          MODEL_SHA256=$(sha256sum models/v2_robust_augmented/model_int8.tflite | awk '{print $1}')
           {
+            echo "Model SHA256: ${MODEL_SHA256}"
             echo "================================================================================"
             echo " PASS 1: NATIVE ARM64 RAW CPU KERNEL PROFILE (1 Thread, --use_xnnpack=false)"
             echo "================================================================================"
           } > reports/05_arm64_hardware_telemetry_int8.txt
           ./benchmark_model \
-            --graph=models/v2_data_flywheel/model_int8.tflite \
+            --graph=models/v2_robust_augmented/model_int8.tflite \
             --num_threads=1 \
             --warmup_runs=20 \
             --num_runs=200 \
@@ -65,13 +70,16 @@ jobs:
             echo "================================================================================"
           } >> reports/05_arm64_hardware_telemetry_int8.txt
           ./benchmark_model \
-            --graph=models/v2_data_flywheel/model_int8.tflite \
+            --graph=models/v2_robust_augmented/model_int8.tflite \
             --num_threads=1 \
             --warmup_runs=20 \
             --num_runs=200 \
             --use_xnnpack=true \
             --enable_op_profiling=true \
             2>&1 | tee -a reports/05_arm64_hardware_telemetry_int8.txt
+
+      - name: Run Stage 4 Release Gate (Locked Fold 5 + Enforced ARM64 Telemetry)
+        run: python release_gate.py --require-arm64-telemetry
 
       - name: Run Pipeline Test Suite
         run: pytest test_pipeline.py

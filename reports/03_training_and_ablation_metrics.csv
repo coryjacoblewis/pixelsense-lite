@@ -1,5 +1,7 @@
-configuration,train_views,epochs,adjudication_weighted,f1_clean_%,f1_pocket_occluded_%,f1_appliance_noise_3db_%
-v1_baseline,181,65,False,83.99,45.91,38.24
-step_matched_clean,181,325,False,81.97,69.48,26.77
-v2_augmentation_only,905,65,False,82.03,83.21,77.27
-v2_data_flywheel,905,65,True,90.5,90.5,77.41
+configuration,train_views,epochs,noisy_label_downweighted,empirical_class_prior,val_f1_clean_%,val_f1_pocket_occluded_%,val_f1_appliance_noise_3db_%,val_macro_f1_mean_%,val_max_slice_bg_fpr_%,f1_clean_%,f1_pocket_occluded_%,f1_appliance_noise_3db_%,f1_macro_mean_%,eval_max_slice_bg_fpr_%,int8_f1_clean_%,int8_f1_pocket_occluded_%,int8_f1_appliance_noise_3db_%,int8_f1_macro_mean_%,int8_eval_max_slice_bg_fpr_%,val_f1_5seed_mean_%,val_f1_5seed_std_%,val_bg_fpr_5seed_mean_%,eval_f1_5seed_mean_%,eval_f1_5seed_std_%,eval_bg_fpr_5seed_mean_%,eval_bg_fpr_5seed_std_%,int8_eval_f1_5seed_mean_%,int8_eval_f1_5seed_std_%,int8_eval_bg_fpr_5seed_mean_%,int8_eval_bg_fpr_5seed_std_%
+v1_baseline,140,70,False,False,80.75,37.08,28.63,48.82,84.21,79.49,46.62,24.33,50.15,88.0,80.69,46.62,24.33,50.55,88.0,49.03,4.27,96.84,48.41,1.07,96.8,4.66,47.53,1.75,96.8,4.66
+step_matched_clean,140,350,False,False,84.74,60.46,31.23,58.81,21.05,92.04,59.14,33.76,61.65,20.0,92.04,59.14,28.78,59.99,20.0,57.65,5.79,47.37,58.36,5.4,47.2,32.14,57.66,5.8,45.6,32.46
+v2_augmentation_only,700,70,False,False,63.93,80.6,74.23,72.92,36.84,79.56,86.08,75.83,80.49,36.0,76.82,86.94,76.77,80.18,36.0,71.42,4.08,27.37,77.77,2.56,27.2,9.6,77.03,3.5,27.2,9.6
+v2_aug_oof_weights_only,700,70,True,False,74.23,80.6,67.4,74.08,26.32,78.13,89.38,73.15,80.22,32.0,78.13,89.38,70.4,79.3,32.0,71.78,6.79,28.42,77.53,3.57,25.6,9.67,77.75,1.97,25.6,9.67
+v2_aug_empirical_prior_only,700,70,False,True,80.44,86.62,69.23,78.76,10.53,91.44,86.07,56.86,78.12,12.0,91.44,83.03,54.08,76.18,12.0,74.97,4.67,16.85,76.83,0.81,11.2,5.31,76.13,0.89,11.2,5.31
+v2_robust_augmented,700,70,True,True,74.61,77.39,63.26,71.75,15.79,90.35,82.62,55.21,76.06,4.0,86.7,82.62,55.21,74.84,8.0,76.16,5.45,18.95,77.52,3.2,12.0,8.39,76.81,2.46,13.6,8.62

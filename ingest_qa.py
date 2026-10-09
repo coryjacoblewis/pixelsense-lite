@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 1: Audio corpus ingestion, signal QA, and background vocal-bleed screening."""
+"""Stage 1: Audio corpus ingestion and physical signal QA screening."""
 
 import os
 import urllib.request
@@ -7,7 +7,6 @@ import zipfile
 import numpy as np
 import pandas as pd
 from scipy.io import wavfile
-from scipy.signal import butter, lfilter
 
 DATA_DIR = "data"
 ESC_ZIP = os.path.join(DATA_DIR, "ESC-50-master.zip")
@@ -66,40 +65,22 @@ def _frame_rms(sig: np.ndarray, sr: int) -> np.ndarray:
     return np.sqrt(np.mean(frames**2, axis=1) + 1e-12)
 
 
-def compute_speech_formant_metrics(x: np.ndarray, sr: int) -> tuple[float, float]:
-    """Computes 300-3,400 Hz band energy ratio and 50ms envelope crest factor."""
-    x_ac = x - float(np.mean(x))
-    nyq = max(0.5 * sr, 400.0)
-    low = min(max(300.0 / nyq, 0.01), 0.90)
-    high = max(min(3400.0 / nyq, 0.95), low + 0.02)
-    b, a = butter(4, [low, high], btype="band")
-    x_speech = lfilter(b, a, x_ac)
-
-    speech_band_ratio = float(np.sum(x_speech**2)) / float(np.sum(x_ac**2) + 1e-12)
-    frame_rms = _frame_rms(x_speech, sr)
-    envelope_crest = (
-        float(np.max(frame_rms) / (np.mean(frame_rms) + 1e-12))
-        if frame_rms.size > 0
-        else 1.0
-    )
-    return speech_band_ratio, envelope_crest
-
-
 def _corrupt_header_result(sr: int = 0) -> dict:
     return {
         "qa_status": "QUARANTINE_CORRUPT_HEADER",
         "all_qa_flags": "QUARANTINE_CORRUPT_HEADER",
         "sample_rate": max(0, int(sr) if sr else 0),
         "peak_amplitude": 0.0,
+        "clipped_samples": 0,
+        "clipping_severity": "NONE",
         "dc_offset": 0.0,
         "active_frame_ratio": 0.0,
-        "speech_band_ratio": 0.0,
-        "envelope_crest": 0.0,
     }
 
 
-def audit_wav_signal(filepath: str, category: str) -> dict:
-    """Audits a WAV file for clipping, dead air, DC bias, and vocal bleed in background classes."""
+def audit_wav_signal(filepath: str, category: str | None = None) -> dict:
+    """Audits a WAV file for multi-sample clipping saturation, excessive dead air, and DC offset."""
+    del category  # Signal QA is strictly physical and category-agnostic
     try:
         sr, raw = wavfile.read(filepath)
     except Exception:
@@ -112,6 +93,13 @@ def audit_wav_signal(filepath: str, category: str) -> dict:
     x = to_mono(scaled)
 
     peak_amp = float(np.max(np.abs(scaled)))
+    clipped_samples = int(np.sum(np.abs(scaled) >= 0.998))
+    if clipped_samples == 0:
+        clipping_severity = "NONE"
+    elif clipped_samples <= 2:
+        clipping_severity = "SINGLE_SAMPLE_PEAK_NORM"
+    else:
+        clipping_severity = "MULTI_SAMPLE_SATURATION"
     dc_offset = float(np.max(np.abs(np.mean(scaled, axis=0))))
 
     frame_rms = _frame_rms(x, sr)
@@ -121,40 +109,30 @@ def audit_wav_signal(filepath: str, category: str) -> dict:
         else 0.0
     )
 
-    speech_band_ratio, envelope_crest = compute_speech_formant_metrics(x, sr)
-    # Screen background/interferer recordings for transient mid-band or vocal bleed
-    has_vocal_bleed = (
-        category in INTERFERER_CLASSES
-        and speech_band_ratio > 0.62
-        and envelope_crest > 2.35
-    )
-
     flags = []
-    if has_vocal_bleed:
-        flags.append("QUARANTINE_FOREGROUND_VOCAL_BLEED")
-    if peak_amp >= 0.998:
-        flags.append("QUARANTINE_ADC_PREAMP_CLIPPING")
+    if peak_amp >= 0.998 and clipped_samples > 2:
+        flags.append("QUARANTINE_CLIPPING_SATURATION")
     if active_ratio < 0.12:
         flags.append("QUARANTINE_EXCESSIVE_DEAD_AIR")
     if dc_offset > 0.002:
-        flags.append("QUARANTINE_MIC_DC_OFFSET_BIAS")
+        flags.append("QUARANTINE_DC_OFFSET")
 
     return {
         "qa_status": flags[0] if flags else "PASS",
         "all_qa_flags": "|".join(flags) if flags else "PASS",
         "sample_rate": int(sr),
         "peak_amplitude": round(peak_amp, 4),
+        "clipped_samples": clipped_samples,
+        "clipping_severity": clipping_severity,
         "dc_offset": round(dc_offset, 5),
         "active_frame_ratio": round(active_ratio, 3),
-        "speech_band_ratio": round(speech_band_ratio, 3),
-        "envelope_crest": round(envelope_crest, 3),
     }
 
 
 def run_ingestion_qa() -> pd.DataFrame:
-    """Runs the Stage 1 download and signal QA audit across all 320 recordings."""
+    """Runs the Stage 1 download and signal QA audit across all 320 ESC-50 subset recordings."""
     download_real_corpus()
-    print("[Stage 1] Running audio ingestion QA...")
+    print("[Stage 1] Running audio signal QA...")
 
     meta_path = os.path.join(ESC_DIR, "meta", "esc50.csv")
     meta = pd.read_csv(meta_path)
@@ -168,7 +146,7 @@ def run_ingestion_qa() -> pd.DataFrame:
 
     qa_df = pd.DataFrame(records)
     os.makedirs("reports", exist_ok=True)
-    out_csv = "reports/01_vendor_data_qa_report.csv"
+    out_csv = "reports/01_signal_qa_report.csv"
     qa_df.to_csv(out_csv, index=False)
 
     pass_count = int((qa_df["qa_status"] == "PASS").sum())

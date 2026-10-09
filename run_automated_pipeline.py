@@ -14,13 +14,14 @@ def main() -> None:
     ingest_qa.run_ingestion_qa()
     stage2_data = consensus_drift.run_consensus_and_drift()
 
-    for version_tag in ["v1_baseline", "v2_data_flywheel"]:
+    for version_tag in ["v1_baseline", "v2_robust_augmented"]:
         train_quantize.train_and_export_version(version_tag)
+    train_quantize.run_confounder_ablations()
 
     release_gate.run_release_gate(
-        versions=["v1_baseline", "v2_data_flywheel"],
+        versions=["v1_baseline", "v2_robust_augmented"],
         eval_slices=stage2_data["eval_slices"],
-        enforce_target="v2_data_flywheel",
+        enforce_target="v2_robust_augmented",
     )
     print(f"[Pipeline] Complete in {time.perf_counter() - t_start:.1f}s.")
 
