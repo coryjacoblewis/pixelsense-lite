@@ -18,6 +18,8 @@ Models trained only on clean studio audio (`v1_baseline`) fail in real-world con
 | **Model Binary Size / ARM64 Latency (p95)** | 22.98 KB / — | **22.98 KB / 177 µs** | Same footprint | `<= 45 KB` / `<= 1.0 ms` |
 | **Release Gate Verdict** | **BLOCKED** | **SHIP (PASS)** | — | All gates passed |
 
+![64x64 Log-Mel Spectrogram Comparison: Clean vs. Pocket-Occluded vs. +3 dB Appliance Noise](./docs/spectral_shift_slices.svg)
+
 ---
 
 ## Quickstart
@@ -27,9 +29,9 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-python release_gate.py --require-arm64-telemetry  # Fast gate check on cached slices & .tflite (<3s)
-pytest test_pipeline.py                           # Unit & integration test suite (<3s)
-python run_automated_pipeline.py                  # Full rebuild (downloads ESC-50, runs Stages 1-4)
+python run_automated_pipeline.py                  # Run full pipeline (Stages 1-4: QA, drift audit, training, gate)
+python release_gate.py --require-arm64-telemetry  # Re-run Stage 4 release gate + SHA-256 ARM64 telemetry check
+pytest test_pipeline.py                           # Run unit & integration test suite
 ```
 
 ---

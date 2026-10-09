@@ -21,9 +21,9 @@
 | Priority | Gate Code | Metric | Threshold |
 | :---: | :--- | :--- | :--- |
 | 1 (P0) | `QUARANTINE_CORRUPT_HEADER` | Readable PCM header, `sr > 0`, non-empty, all samples finite | Any violation |
-| 2 (P1) | `QUARANTINE_CLIPPING_SATURATION` | Peak amplitude `max(|x(t)|)` & multi-sample saturation (`MULTI_SAMPLE_SATURATION`) | Peak >= 0.998 & `clipped_samples` > 2 |
+| 2 (P1) | `QUARANTINE_CLIPPING_SATURATION` | Peak amplitude `max(abs(x(t)))` & multi-sample saturation (`MULTI_SAMPLE_SATURATION`) | Peak >= 0.998 & `clipped_samples` > 2 |
 | 3 (P1) | `QUARANTINE_EXCESSIVE_DEAD_AIR` | Active 50ms frames > -50 dBFS RMS | < 0.12 |
-| 4 (P1) | `QUARANTINE_DC_OFFSET` | Mean waveform drift `|mean(x)|` | > 0.002 |
+| 4 (P1) | `QUARANTINE_DC_OFFSET` | Mean waveform drift `abs(mean(x))` | > 0.002 |
 
 ---
 
