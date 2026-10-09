@@ -9,11 +9,13 @@ import tensorflow as tf
 from sklearn.metrics import f1_score
 from sklearn.utils.class_weight import compute_class_weight
 
-from consensus_drift import load_cached_eval_slices, load_cached_val_slices
+from consensus_drift import SLICES, load_cached_eval_slices, load_cached_val_slices
 
 NUM_CLASSES = 5
 DEFAULT_EPOCHS = 70
 ABLAT_SEEDS = (42, 43, 44, 45, 46)
+VAL_SWA_MAX_BG_FPR_PCT = 16.0  # <= 3 / 19 background clips on Fold 4 validation
+_TRAINED_MODEL_CACHE: dict[tuple[str, int, bool, bool, int], tuple[tf.keras.Model, np.ndarray]] = {}
 
 
 def build_embedded_cnn(seed: int = 42) -> tf.keras.Model:
@@ -109,6 +111,94 @@ def compile_tflite_suite(
     return paths
 
 
+def _eval_keras_slices(
+    model: tf.keras.Model, slices: dict[str, tuple[np.ndarray, np.ndarray]]
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Evaluates Macro F1 and background FPR across slices in a single batched forward pass."""
+    slice_names = list(slices.keys())
+    X_concat = np.concatenate([slices[s][0] for s in slice_names], axis=0)
+    preds_all = np.argmax(np.asarray(model(X_concat, training=False)), axis=-1)
+
+    f1s, bg_fprs = {}, {}
+    offset = 0
+    for s_name in slice_names:
+        y_s = slices[s_name][1]
+        n_s = len(y_s)
+        preds = preds_all[offset : offset + n_s]
+        offset += n_s
+        f1s[s_name] = round(
+            float(f1_score(y_s, preds, average="macro", zero_division=0) * 100.0), 2
+        )
+        bg_mask = y_s == 0
+        bg_fprs[s_name] = round(
+            float(np.mean(preds[bg_mask] != 0) * 100.0), 2
+        )
+    return f1s, bg_fprs
+
+
+class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
+    """Performs Fold 4 validation-guided late-epoch Stochastic Weight Averaging (SWA).
+
+    Records epoch-end weight snapshots over the final ~25% of training epochs and averages
+    those that satisfy the Fold 4 validation background FPR gate (`<= 16.0%`, i.e., `<= 3/19`
+    background clips), or the top-3 lowest-FPR late checkpoints if fewer than 3 qualify.
+    This suppresses single-epoch mini-batch decision-boundary jitter without touching Fold 5.
+    """
+
+    def __init__(
+        self,
+        val_slices: dict[str, tuple[np.ndarray, np.ndarray]],
+        total_epochs: int,
+        min_Fallback_k: int = 3,
+    ) -> None:
+        super().__init__()
+        self.val_slices = val_slices
+        self.record_start_ep = max(5, int(total_epochs * 0.75))
+        self.swa_start_ep = max(5, int(total_epochs * 0.78))
+        self.min_fallback_k = min_Fallback_k
+        self.snapshots: list[tuple[int, list[np.ndarray], float, float]] = []
+
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
+        del logs
+        ep = epoch + 1
+        if ep < self.record_start_ep:
+            return
+        vf1, vfpr = _eval_keras_slices(self.model, self.val_slices)
+        max_vfpr = float(max(vfpr.values()))
+        mean_vf1 = float(np.mean(list(vf1.values())))
+        weights_copy = [w.copy() for w in self.model.get_weights()]
+        self.snapshots.append((ep, weights_copy, mean_vf1, max_vfpr))
+
+    def on_train_end(self, logs: dict | None = None) -> None:
+        del logs
+        if not self.snapshots:
+            return
+        feasible_late = [
+            w
+            for ep, w, _, max_vfpr in self.snapshots
+            if ep >= self.swa_start_ep and max_vfpr <= VAL_SWA_MAX_BG_FPR_PCT
+        ]
+        if len(feasible_late) >= self.min_fallback_k:
+            chosen = feasible_late
+        else:
+            ranked = sorted(
+                self.snapshots,
+                key=lambda item: (
+                    item[3] <= VAL_SWA_MAX_BG_FPR_PCT,
+                    -round(item[3], 2),
+                    round(item[2], 2),
+                ),
+                reverse=True,
+            )
+            chosen = [item[1] for item in ranked[: self.min_fallback_k]]
+
+        avg_weights = [
+            np.mean([w[layer_idx] for w in chosen], axis=0)
+            for layer_idx in range(len(chosen[0]))
+        ]
+        self.model.set_weights(avg_weights)
+
+
 def _fit_candidate(
     suffix: str,
     epochs: int = DEFAULT_EPOCHS,
@@ -116,7 +206,11 @@ def _fit_candidate(
     use_empirical_prior: bool = True,
     seed: int = 42,
 ) -> tuple[tf.keras.Model, np.ndarray]:
-    """Loads cached Folds 1-3 tensors for a candidate suffix ('v1' or 'v2') and trains a seeded CNN."""
+    """Loads cached Folds 1-3 tensors for a candidate suffix ('v1' or 'v2') and trains a seeded CNN with Fold 4 SWA."""
+    cache_key = (suffix, epochs, use_noisy_label_weights, use_empirical_prior, seed)
+    if cache_key in _TRAINED_MODEL_CACHE:
+        return _TRAINED_MODEL_CACHE[cache_key]
+
     X_train = np.load(f"data/golden_eval/X_train_{suffix}.npy")
     y_train = np.load(f"data/golden_eval/y_train_{suffix}.npy")
     w_path = f"data/golden_eval/w_train_{suffix}.npy"
@@ -125,7 +219,9 @@ def _fit_candidate(
         if (use_noisy_label_weights and os.path.exists(w_path))
         else None
     )
+    val_slices = load_cached_val_slices()
     model = build_embedded_cnn(seed=seed)
+    swa_cb = _Fold4ValSWACallback(val_slices=val_slices, total_epochs=epochs)
     model.fit(
         X_train,
         y_train,
@@ -134,8 +230,10 @@ def _fit_candidate(
         sample_weight=_compute_sample_weights(
             y_train, w_noisy, use_empirical_prior=use_empirical_prior
         ),
+        callbacks=[swa_cb],
         verbose=0,
     )
+    _TRAINED_MODEL_CACHE[cache_key] = (model, X_train)
     return model, X_train
 
 
@@ -161,41 +259,29 @@ def train_and_export_version(
     return compile_tflite_suite(model, X_train, version_tag)
 
 
-def _eval_keras_slices(
-    model: tf.keras.Model, slices: dict[str, tuple[np.ndarray, np.ndarray]]
-) -> tuple[dict[str, float], dict[str, float]]:
-    f1s, bg_fprs = {}, {}
-    for s_name, (X_s, y_s) in slices.items():
-        preds = np.argmax(model.predict(X_s, verbose=0), axis=-1)
-        f1s[s_name] = round(
-            float(f1_score(y_s, preds, average="macro", zero_division=0) * 100.0), 2
-        )
-        bg_mask = y_s == 0
-        bg_fprs[s_name] = round(
-            float(np.mean(preds[bg_mask] != 0) * 100.0), 2
-        )
-    return f1s, bg_fprs
-
-
 def _eval_int8_slices(
     model: tf.keras.Model,
     X_calib: np.ndarray,
     slices: dict[str, tuple[np.ndarray, np.ndarray]],
+    tflite_path: str | None = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
-    """Compiles an in-memory INT8 .tflite flatbuffer and evaluates Macro F1 and BG FPR across slices."""
-    def representative_dataset():
-        for idx in np.linspace(0, len(X_calib) - 1, min(150, len(X_calib)), dtype=int):
-            yield [X_calib[idx : idx + 1].astype(np.float32)]
+    """Compiles (or loads) an INT8 .tflite flatbuffer and evaluates Macro F1 and BG FPR across slices."""
+    if tflite_path and os.path.exists(tflite_path):
+        interp = tf.lite.Interpreter(model_path=tflite_path)
+    else:
+        def representative_dataset():
+            for idx in np.linspace(0, len(X_calib) - 1, min(150, len(X_calib)), dtype=int):
+                yield [X_calib[idx : idx + 1].astype(np.float32)]
 
-    conv = tf.lite.TFLiteConverter.from_keras_model(model)
-    conv.optimizations = [tf.lite.Optimize.DEFAULT]
-    conv.representative_dataset = representative_dataset
-    conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-    conv.inference_input_type = tf.int8
-    conv.inference_output_type = tf.int8
-    tflite_buf = conv.convert()
+        conv = tf.lite.TFLiteConverter.from_keras_model(model)
+        conv.optimizations = [tf.lite.Optimize.DEFAULT]
+        conv.representative_dataset = representative_dataset
+        conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+        conv.inference_input_type = tf.int8
+        conv.inference_output_type = tf.int8
+        tflite_buf = conv.convert()
+        interp = tf.lite.Interpreter(model_content=tflite_buf)
 
-    interp = tf.lite.Interpreter(model_content=tflite_buf)
     interp.allocate_tensors()
     in_det = interp.get_input_details()[0]
     out_det = interp.get_output_details()[0]
@@ -268,7 +354,14 @@ def run_confounder_ablations(
             n_views = len(X_tr)
             v_f1, v_fpr = _eval_keras_slices(model, val_slices)
             e_f1, e_fpr = _eval_keras_slices(model, eval_slices)
-            i_f1, i_fpr = _eval_int8_slices(model, X_tr, eval_slices)
+            cached_tfl = (
+                os.path.join("models", name, "model_int8.tflite")
+                if s == 42
+                else None
+            )
+            i_f1, i_fpr = _eval_int8_slices(
+                model, X_tr, eval_slices, tflite_path=cached_tfl
+            )
 
             seed_val_means.append(float(np.mean(list(v_f1.values()))))
             seed_eval_means.append(float(np.mean(list(e_f1.values()))))

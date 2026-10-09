@@ -13,10 +13,10 @@ Models trained only on clean studio audio (`v1_baseline`) fail in real-world con
 
 | Metric (Locked Fold 5 Test Set, `INT8` `.tflite`) | `v1_baseline` (Clean Train) | `v2_robust_augmented` (Ours) | Improvement | Release Requirement |
 | :--- | :---: | :---: | :---: | :---: |
-| **Clean Audio Accuracy (Macro F1)** | 80.69% | **86.70%** | `+6.01%` | `>= 65.0%` |
+| **Clean Audio Accuracy (Macro F1)** | 82.77% | **88.47%** | `+5.70%` | `>= 65.0%` |
 | **Pocket-Muffled Accuracy (Macro F1)** (1,600 Hz low-pass) | 46.62% | **82.62%** | **`+36.00%`** | `>= 58.0%` |
-| **Noisy Room Accuracy (Macro F1)** (+3 dB appliance noise) | 24.33% | **55.21%** | **`+30.88%`** | `>= 52.0%` |
-| **False-Alarm Rate on Background Noise (Max BG FPR)** | 88.00% | **8.00%** | **`-80.00%`** | `<= 15.0%` |
+| **Noisy Room Accuracy (Macro F1)** (+3 dB appliance noise) | 25.51% | **59.42%** | **`+33.91%`** | `>= 52.0%` |
+| **False-Alarm Rate on Background Noise (Max BG FPR)** | 88.00% | **4.00%** | **`-84.00%`** | `<= 15.0%` |
 | **Model Binary Size / ARM64 Latency (p95)** | 22.98 KB / — | **22.98 KB / 177 µs** | Same footprint | `<= 45 KB` / `<= 1.0 ms` |
 | **Release Gate Verdict** | **BLOCKED** | **SHIP (PASS)** | — | All gates passed |
 
@@ -59,7 +59,7 @@ flowchart LR
 | :---: | :--- | :--- | :--- |
 | **1. Signal QA** | [`ingest_qa.py`](./ingest_qa.py) | Screens raw WAV files for physical audio defects (clipping saturation, DC offset, dead air). Quarantines 87 bad clips; passes 233 clean clips. | [`reports/01_signal_qa_report.csv`](./reports/01_signal_qa_report.csv) |
 | **2. Drift & Label Audit** | [`consensus_drift.py`](./consensus_drift.py) | Flags and down-weights likely mislabeled training clips (`w = 0.35`), and measures frequency drift (PSI) on Fold 4 to trigger 5x audio augmentation. | [`reports/02_oof_label_noise_audit.csv`](./reports/02_oof_label_noise_audit.csv), [`reports/02_psi_spectral_drift_audit.csv`](./reports/02_psi_spectral_drift_audit.csv) |
-| **3. Train & Quantize** | [`train_quantize.py`](./train_quantize.py) | Trains a compact 2D CNN on 64x64 Log-Mel spectrograms and exports `fp32`, `fp16`, and 8-bit integer (`int8`) `.tflite` models across 5 random seeds. | [`reports/03_training_and_ablation_metrics.csv`](./reports/03_training_and_ablation_metrics.csv) |
+| **3. Train & Quantize** | [`train_quantize.py`](./train_quantize.py) | Trains a compact 2D CNN on 64x64 Log-Mel spectrograms with Fold 4 validation-guided late-epoch SWA and exports `fp32`, `fp16`, and 8-bit integer (`int8`) `.tflite` models across 5 random seeds. | [`reports/03_training_and_ablation_metrics.csv`](./reports/03_training_and_ablation_metrics.csv) |
 | **4. Release Gate** | [`release_gate.py`](./release_gate.py) | Audits `.tflite` memory/operators, verifies SHA-256 ARM64 XNNPACK speed, and blocks any candidate failing Fold 5 accuracy or false-alarm limits. | [`reports/04_release_gate_scorecard.md`](./reports/04_release_gate_scorecard.md) |
 
 > **Reference Docs:** [Audio Corpus & Signal QA SOP (`docs/data_collection_sop.md`)](./docs/data_collection_sop.md) | [Model & Data Cards (`docs/model_and_data_cards.md`)](./docs/model_and_data_cards.md)
@@ -90,16 +90,16 @@ flowchart LR
 
 ### Stage 3: Ablation Study — Why `v2_robust_augmented` Works ([`reports/03_training_and_ablation_metrics.csv`](./reports/03_training_and_ablation_metrics.csv))
 
-Because over half of the training corpus is background noise (`53.6%`), standard equal-class weighting (`Balanced 1/K`) causes the model to over-predict rare target events and triggers **25%–97% false-alarm rates** (`BG FPR`). Training on the **natural class mix (`Empirical Prior`)** with **5x audio augmentation** and **noisy-label down-weighting (`w=0.35`)** cuts false alarms to **`8.0%`** (`13.6%` mean across 5 independent training seeds):
+Because over half of the training corpus is background noise (`53.6%`), standard equal-class weighting (`Balanced 1/K`) causes the model to over-predict rare target events and triggers **21%–98% false-alarm rates** (`BG FPR`). Training on the **natural class mix (`Empirical Prior`)** with **5x audio augmentation**, **noisy-label down-weighting (`w=0.35`)**, and **Fold 4 validation-guided late-epoch SWA** cuts false alarms to **`4.0%`** (`8.8%` mean across 5 independent training seeds):
 
 | Configuration (Trained on Folds 1–3) | Train Views / Epochs | Weighting & Prior | Seed-42 INT8 Clean / Pocket / +3dB F1 (Mean) | Seed-42 INT8 Max BG FPR | 5-Seed INT8 Mean F1 ± Std | 5-Seed INT8 Max BG FPR ± Std |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 1. `v1_baseline` (Clean Only) | 140 / 70 | `w=1.00`, Balanced 1/K | 80.69% / 46.62% / 24.33% (`50.55%`) | 88.00% | `47.53 ± 1.75%` | `96.80 ± 4.66%` |
-| 2. `step_matched_clean` (5x Epochs) | 140 / 350 | `w=1.00`, Balanced 1/K | 92.04% / 59.14% / 28.78% (`59.99%`) | 20.00% | `57.66 ± 5.80%` | `45.60 ± 32.46%` |
-| 3. `v2_augmentation_only` | 700 / 70 | `w=1.00`, Balanced 1/K | 76.82% / 86.94% / 76.77% (`80.18%`) | 36.00% | `77.03 ± 3.50%` | `27.20 ± 9.60%` |
-| 4. `v2_aug_oof_weights_only` | 700 / 70 | `w=0.35`, Balanced 1/K | 78.13% / 89.38% / 70.40% (`79.30%`) | 32.00% | `77.75 ± 1.97%` | `25.60 ± 9.67%` |
-| 5. `v2_aug_empirical_prior_only` | 700 / 70 | `w=1.00`, Empirical Prior | 91.44% / 83.03% / 54.08% (`76.18%`) | 12.00% | `76.13 ± 0.89%` | `11.20 ± 5.31%` |
-| 6. **`v2_robust_augmented`** | 700 / 70 | **`w=0.35` + Empirical Prior** | **86.70% / 82.62% / 55.21% (`74.84%`)** | **8.00%** | **`76.81 ± 2.46%`** | **`13.60 ± 8.62%`** |
+| 1. `v1_baseline` (Clean Only) | 140 / 70 | `w=1.00`, Balanced 1/K | 82.77% / 46.62% / 25.51% (`51.63%`) | 88.00% | `48.82 ± 1.60%` | `97.60 ± 4.80%` |
+| 2. `step_matched_clean` (5x Epochs) | 140 / 350 | `w=1.00`, Balanced 1/K | 90.34% / 59.14% / 29.99% (`59.82%`) | 20.00% | `57.01 ± 3.63%` | `27.20 ± 22.96%` |
+| 3. `v2_augmentation_only` | 700 / 70 | `w=1.00`, Balanced 1/K | 86.70% / 83.60% / 64.16% (`78.15%`) | 20.00% | `76.88 ± 2.04%` | `23.20 ± 9.93%` |
+| 4. `v2_aug_oof_weights_only` | 700 / 70 | `w=0.35`, Balanced 1/K | 83.52% / 81.33% / 62.68% (`75.84%`) | 20.00% | `76.90 ± 1.47%` | `21.60 ± 9.67%` |
+| 5. `v2_aug_empirical_prior_only` | 700 / 70 | `w=1.00`, Empirical Prior | 90.04% / 82.72% / 55.21% (`75.99%`) | 8.00% | `76.15 ± 3.28%` | `12.00 ± 8.39%` |
+| 6. **`v2_robust_augmented`** | 700 / 70 | **`w=0.35` + Empirical Prior** | **88.47% / 82.62% / 59.42% (`76.84%`)** | **4.00%** | **`79.59 ± 1.82%`** | **`8.80 ± 6.40%`** |
 
 ### Stage 4: Full Release Gate Scorecard & Hardware Telemetry ([`reports/04_release_gate_scorecard.md`](./reports/04_release_gate_scorecard.md))
 
@@ -109,22 +109,22 @@ Quantizing from 32-bit float (`fp32`) to 8-bit integer (`int8`) shrinks the mode
 
 | Candidate | Quant | Binary (`<=45 KB`) | Subgraph Tensors (`<=160 KB`) | Peak Op I/O (`<=100 KB`) | INT Tensors (`100%`) | Host p99 (`<=5.0 ms`) | Clean / Pocket / +3dB F1 | Pooled / Max BG FPR (`<=15%`) | Gate Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `v1_baseline` | `fp32` | 64.08 KB | 587.94 KB | 320.00 KB | 4.8% | 0.331 ms | 79.49% / 46.62% / 24.33% | 36.00% / 88.00% | BLOCKED (HW + SLICE) |
-| `v1_baseline` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.310 ms | 79.49% / 46.62% / 24.33% | 36.00% / 88.00% | BLOCKED (HW + SLICE) |
-| `v1_baseline` | `int8` | 22.98 KB | 147.33 KB | 80.00 KB | 100.0% | 0.120 ms | 80.69% / 46.62% / 24.33% | 34.67% / 88.00% | BLOCKED (SLICE F1) |
-| `v2_robust_augmented` | `fp32` | 64.08 KB | 587.94 KB | 320.00 KB | 4.8% | 0.310 ms | 90.35% / 82.62% / 55.21% | 2.67% / 4.00% | BLOCKED (HW) |
-| `v2_robust_augmented` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.317 ms | 90.35% / 82.62% / 55.21% | 2.67% / 4.00% | BLOCKED (HW) |
-| **`v2_robust_augmented`** | **`int8`** | **22.98 KB** | **147.33 KB** | **80.00 KB** | **100.0%** | **0.123 ms** | **86.70% / 82.62% / 55.21%** | **4.00% / 8.00%** | **SHIP (PASS)** |
+| `v1_baseline` | `fp32` | 64.08 KB | 587.94 KB | 320.00 KB | 4.8% | 0.344 ms | 83.54% / 46.62% / 25.34% | 33.33% / 88.00% | BLOCKED (HW + SLICE) |
+| `v1_baseline` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.359 ms | 83.54% / 46.62% / 25.34% | 33.33% / 88.00% | BLOCKED (HW + SLICE) |
+| `v1_baseline` | `int8` | 22.98 KB | 147.33 KB | 80.00 KB | 100.0% | 0.145 ms | 82.77% / 46.62% / 25.51% | 30.67% / 88.00% | BLOCKED (SLICE F1) |
+| `v2_robust_augmented` | `fp32` | 64.08 KB | 587.94 KB | 320.00 KB | 4.8% | 0.319 ms | 88.47% / 79.47% / 59.42% | 2.67% / 4.00% | BLOCKED (HW) |
+| `v2_robust_augmented` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.315 ms | 88.47% / 79.47% / 59.42% | 2.67% / 4.00% | BLOCKED (HW) |
+| **`v2_robust_augmented`** | **`int8`** | **22.98 KB** | **147.33 KB** | **80.00 KB** | **100.0%** | **0.120 ms** | **88.47% / 82.62% / 59.42%** | **2.67% / 4.00%** | **SHIP (PASS)** |
 
 #### 2. Statistical Confidence (1,000-Run Source-Clustered Bootstrap on Fold 5)
 
-Resampling Fold 5 across its 42 source recordings confirms that the **`+36.00%`** pocket-muffled F1 gain and **`+30.88%`** noisy-room F1 gain are statistically significant (95% confidence intervals exclude zero):
+Resampling Fold 5 across its 42 source recordings confirms that the **`+36.00%`** pocket-muffled F1 gain and **`+33.91%`** noisy-room F1 gain are statistically significant (95% confidence intervals exclude zero):
 
 | Locked Fold 5 Slice | `v1_baseline` INT8 (95% CI) | `v2_robust_augmented` INT8 (95% CI) | Paired ΔF1 (`v2 - v1`) | Paired ΔF1 95% Bootstrap CI | `v1` BG FPR | `v2` BG FPR |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `clean` (Reference Audio) | 80.69% `[68.80%, 92.87%]` | 86.70% `[74.42%, 96.37%]` | `+6.01%` | `[-12.59%, +21.35%]` | 12.00% | **8.00%** |
+| `clean` (Reference Audio) | 82.77% `[69.62%, 93.25%]` | 88.47% `[80.14%, 96.37%]` | `+5.70%` | `[-4.78%, +20.20%]` | 4.00% | **4.00%** |
 | `pocket_occluded` (1,600 Hz LP) | 46.62% `[33.46%, 74.41%]` | 82.62% `[72.76%, 96.34%]` | **`+36.00%`** | **`[+14.64%, +48.58%]`** | 88.00% | **0.00%** |
-| `appliance_noise_3db` (+3 dB SNR) | 24.33% `[14.05%, 32.45%]` | 55.21% `[43.58%, 68.05%]` | **`+30.88%`** | **`[+18.40%, +45.15%]`** | 4.00% | **4.00%** |
+| `appliance_noise_3db` (+3 dB SNR) | 25.51% `[13.70%, 33.16%]` | 59.42% `[48.77%, 74.62%]` | **`+33.91%`** | **`[+20.40%, +52.22%]`** | 0.00% | **4.00%** |
 
 #### 3. Native ARM64 Operator Speed ([`reports/05_arm64_op_profile_int8.csv`](./reports/05_arm64_op_profile_int8.csv), [`reports/05_arm64_hardware_telemetry_int8.txt`](./reports/05_arm64_hardware_telemetry_int8.txt))
 

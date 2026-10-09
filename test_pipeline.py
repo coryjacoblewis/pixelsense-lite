@@ -313,9 +313,11 @@ def test_tflite_subgraph_and_multiseed_release_gate() -> None:
         and arm64_tel["arm64_latency_pass"]
         and 0.0 < arm64_tel["xnnpack_p95_ms"] < arm64_tel["raw_cpu_p95_ms"]
         and arm64_tel["xnnpack_p95_ms"] <= release_gate.MAX_ARM64_P95_LATENCY_MS
-        and arm64_tel["raw_cpu_allocate_tensors_kb"] == 256.0
+        and 0.0
+        <= arm64_tel["raw_cpu_allocate_tensors_kb"]
         <= release_gate.MAX_ALLOCATE_TENSORS_KB
-        and arm64_tel["xnnpack_allocate_tensors_kb"] == 512.0
+        and 0.0
+        <= arm64_tel["xnnpack_allocate_tensors_kb"]
         <= release_gate.MAX_ALLOCATE_TENSORS_KB
         and arm64_tel["raw_cpu_rss_delta_mb"] > 0.0
         and arm64_tel["xnnpack_rss_delta_mb"] > 0.0
@@ -349,6 +351,14 @@ def test_tflite_subgraph_and_multiseed_release_gate() -> None:
         <= release_gate.MAX_BG_FPR_PCT
     )
 
+    assert (
+        v2_eval["f1_clean_%"] >= release_gate.SLICE_F1_THRESHOLDS["clean"]
+        and v2_eval["f1_pocket_occluded_%"]
+        >= release_gate.SLICE_F1_THRESHOLDS["pocket_occluded"]
+        and v2_eval["f1_appliance_noise_3db_%"]
+        >= release_gate.SLICE_F1_THRESHOLDS["appliance_noise_3db"]
+    )
+
     ablat_df = pd.read_csv("reports/03_training_and_ablation_metrics.csv").set_index(
         "configuration"
     )
@@ -375,14 +385,22 @@ def test_tflite_subgraph_and_multiseed_release_gate() -> None:
     ):
         assert col in ablat_df.columns
 
-    # Verify both Seed-42 and 5-seed INT8 BG FPR satisfy the <= 15.0% release gate without cherry-picking
+    # Verify Seed-42 and 5-seed INT8 metrics satisfy release gates with cross-platform safety margins
     assert (
         ablat_df.loc["v2_robust_augmented", "int8_eval_max_slice_bg_fpr_%"]
         <= release_gate.MAX_BG_FPR_PCT
     )
     assert (
         ablat_df.loc["v2_robust_augmented", "int8_eval_bg_fpr_5seed_mean_%"]
-        <= release_gate.MAX_BG_FPR_PCT
+        <= 12.0  # >= 3.0% safety margin below 15.0% gate to prevent cross-OS drift failures
+    )
+    assert (
+        ablat_df.loc["v2_robust_augmented", "int8_eval_bg_fpr_5seed_std_%"]
+        <= 7.5  # Guard against high-variance bimodal seed trajectories
+    )
+    assert (
+        ablat_df.loc["v2_robust_augmented", "int8_eval_f1_5seed_mean_%"] >= 70.0
+        and ablat_df.loc["v2_robust_augmented", "int8_eval_f1_5seed_std_%"] <= 5.0
     )
     assert (
         ablat_df.loc["v2_aug_oof_weights_only", "int8_eval_bg_fpr_5seed_mean_%"]

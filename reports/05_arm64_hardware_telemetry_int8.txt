@@ -1,4 +1,4 @@
-Model SHA256: 32be051b97adf504969b472e3c86b0f4474de7456f0426b853da2a2975d33362
+Model SHA256: 1e5ddab618a1c612764656dbc2dda23bfc3ecbdfae9b013fdd5129a5d1e3f4a0
 ================================================================================
  PASS 1: NATIVE ARM64 RAW CPU KERNEL PROFILE (1 Thread, --use_xnnpack=false)
 ================================================================================
