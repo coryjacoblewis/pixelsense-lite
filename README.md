@@ -9,6 +9,8 @@
 
 Models trained only on clean studio audio (`v1_baseline`) fail in real-world conditions—such as when a phone is muffled inside a pocket or placed near a loud appliance—and trigger false alarms up to **88%** of the time on everyday background noise. PixelSense-Lite (`v2_robust_augmented`) fixes this without increasing model size or latency:
 
+![64x64 Log-Mel Spectrogram Comparison: Clean vs. Pocket-Occluded vs. +3 dB Appliance Noise](./docs/spectral_shift_slices.svg)
+
 | Metric (Locked Fold 5 Test Set, `INT8` `.tflite`) | `v1_baseline` (Clean Train) | `v2_robust_augmented` (Ours) | Improvement | Release Requirement |
 | :--- | :---: | :---: | :---: | :---: |
 | **Clean Audio Accuracy (Macro F1)** | 80.69% | **86.70%** | `+6.01%` | `>= 65.0%` |
@@ -17,8 +19,6 @@ Models trained only on clean studio audio (`v1_baseline`) fail in real-world con
 | **False-Alarm Rate on Background Noise (Max BG FPR)** | 88.00% | **8.00%** | **`-80.00%`** | `<= 15.0%` |
 | **Model Binary Size / ARM64 Latency (p95)** | 22.98 KB / — | **22.98 KB / 177 µs** | Same footprint | `<= 45 KB` / `<= 1.0 ms` |
 | **Release Gate Verdict** | **BLOCKED** | **SHIP (PASS)** | — | All gates passed |
-
-![64x64 Log-Mel Spectrogram Comparison: Clean vs. Pocket-Occluded vs. +3 dB Appliance Noise](./docs/spectral_shift_slices.svg)
 
 ---
 
