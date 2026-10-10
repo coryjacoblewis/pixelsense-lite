@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score
 from sklearn.utils.class_weight import compute_class_weight
 
@@ -150,10 +151,10 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
     Records epoch-end weight snapshots over the final ~25% of training epochs and averages
     those that satisfy the Fold 4 validation background FPR gate (`<= 16.0%`, i.e., `<= 3/19`
     background clips), or the top-3 lowest-FPR late checkpoints if fewer than 3 qualify.
-    When `calibrate_prior=True`, also applies a constrained Fold 4 validation output-bias
-    calibration on the final Dense layer to enforce a tighter Fold 4 background FPR guard
-    (`<= 10.6%`, i.e., `<= 2/19` clips) and recover any target class collapsed under `+3 dB`
-    appliance noise without touching Fold 5.
+    When `calibrate_prior=True`, also refines the final Dense(5) classification head on
+    penultimate 32-D embeddings across Folds 1-4 with view-aware weighting and symmetric
+    margin calibration to enforce tight background FPR (`<= 10.6%` on Fold 4, `<= 3.2%`
+    pooled) while preventing class collapse under `+3 dB` appliance noise without touching Fold 5.
     """
 
     def __init__(
@@ -162,6 +163,9 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
         total_epochs: int,
         min_Fallback_k: int = 3,
         calibrate_prior: bool = True,
+        X_train: np.ndarray | None = None,
+        y_train: np.ndarray | None = None,
+        w_train: np.ndarray | None = None,
     ) -> None:
         super().__init__()
         self.val_slices = val_slices
@@ -169,6 +173,9 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
         self.swa_start_ep = max(5, int(total_epochs * 0.78))
         self.min_fallback_k = min_Fallback_k
         self.calibrate_prior = calibrate_prior
+        self.X_train = X_train
+        self.y_train = y_train
+        self.w_train = w_train
         self.snapshots: list[tuple[int, list[np.ndarray], float, float]] = []
 
     def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
@@ -183,94 +190,130 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
         self.snapshots.append((ep, weights_copy, mean_vf1, max_vfpr))
 
     def _calibrate_output_bias_on_fold4(self) -> None:
-        logits_model = tf.keras.Model(
-            inputs=self.model.inputs, outputs=self.model.layers[-2].output
-        )
+        feat_model = tf.keras.Sequential(self.model.layers[:-1])
         W_last, b_last = self.model.layers[-1].get_weights()
-        val_logits = {
-            s: (np.asarray(logits_model(X_s, training=False)) @ W_last + b_last, y_s)
-            for s, (X_s, y_s) in self.val_slices.items()
+        H_val = {
+            s: np.asarray(feat_model(X_s, training=False))
+            for s, (X_s, _) in self.val_slices.items()
         }
 
-        def eval_with_bias(
-            b_vec: np.ndarray,
-        ) -> tuple[dict[str, float], dict[str, float], np.ndarray]:
-            f1s, fprs = {}, {}
-            per_cls_noise = np.zeros(NUM_CLASSES, dtype=np.float32)
-            for s, (L, y_s) in val_logits.items():
-                preds = np.argmax(L - b_last + b_vec, axis=-1)
-                f1s[s] = float(
-                    f1_score(y_s, preds, average="macro", zero_division=0) * 100.0
-                )
-                fprs[s] = float(np.mean(preds[y_s == 0] != 0) * 100.0)
-                if s == "appliance_noise_3db":
-                    per_cls_noise = np.asarray(
-                        f1_score(y_s, preds, average=None, zero_division=0) * 100.0,
-                        dtype=np.float32,
-                    )
-            return f1s, fprs, per_cls_noise
-
-        b_cur = b_last.copy()
-        base_f1s, base_fprs, base_cls_n = eval_with_bias(b_cur)
-
-        if max(base_fprs.values()) > VAL_CALIB_TARGET_BG_FPR_PCT:
-            base_key0 = (
-                max(base_fprs.values()) <= VAL_CALIB_TARGET_BG_FPR_PCT,
-                max(base_fprs.values()) <= VAL_SWA_MAX_BG_FPR_PCT,
-                -round(max(base_fprs.values()), 2),
-                round(min(base_f1s.values()), 2),
+        if (
+            self.X_train is not None
+            and self.y_train is not None
+            and len(self.y_train) % 5 == 0
+        ):
+            H_tr = np.asarray(feat_model(self.X_train, training=False))
+            y_tr = self.y_train
+            view_idx = np.arange(len(y_tr)) % 5
+            w_head = (
+                self.w_train.copy().astype(np.float32)
+                if self.w_train is not None
+                else np.ones(len(y_tr), dtype=np.float32)
             )
-            valid0 = []
-            for db0 in np.linspace(0.05, 1.5, 30, dtype=np.float32):
-                cand_b = b_cur.copy()
-                cand_b[0] = b_cur[0] + db0
-                f1s, fprs, _ = eval_with_bias(cand_b)
-                if (
-                    min(f1s.values()) >= 58.0
-                    and np.mean(list(f1s.values()))
-                    >= np.mean(list(base_f1s.values())) - 2.0
-                ):
-                    key0 = (
-                        max(fprs.values()) <= VAL_CALIB_TARGET_BG_FPR_PCT,
-                        max(fprs.values()) <= VAL_SWA_MAX_BG_FPR_PCT,
-                        -round(max(fprs.values()), 2),
-                        round(min(f1s.values()), 2),
+            w_head[(y_tr == 0) & (view_idx == 0)] *= 4.5
+            w_head[(y_tr == 0) & np.isin(view_idx, [1, 2])] *= 1.6
+            w_head[(y_tr == 0) & np.isin(view_idx, [3, 4])] *= 0.40
+            w_head[(y_tr > 0) & np.isin(view_idx, [3, 4])] *= 1.9
+            w_head[(y_tr == 2) & np.isin(view_idx, [3, 4])] *= 1.7
+            w_head[(y_tr == 3) & np.isin(view_idx, [3, 4])] *= 1.5
+
+            H_v_all = np.vstack(
+                [
+                    H_val["clean"],
+                    H_val["pocket_occluded"],
+                    H_val["appliance_noise_3db"],
+                ]
+            )
+            y_v_all = np.concatenate(
+                [
+                    self.val_slices["clean"][1],
+                    self.val_slices["pocket_occluded"][1],
+                    self.val_slices["appliance_noise_3db"][1],
+                ]
+            )
+            w_v_all = np.ones(len(y_v_all), dtype=np.float32) * 1.2
+            n_val = len(self.val_slices["clean"][1])
+            w_v_all[:n_val][self.val_slices["clean"][1] == 0] *= 4.0
+            w_v_all[n_val : 2 * n_val][
+                self.val_slices["pocket_occluded"][1] == 0
+            ] *= 2.2
+            w_v_all[2 * n_val :][self.val_slices["appliance_noise_3db"][1] > 0] *= 1.9
+            w_v_all[2 * n_val :][self.val_slices["appliance_noise_3db"][1] == 2] *= 1.6
+
+            clf = LogisticRegression(C=0.45, max_iter=500, random_state=42)
+            clf.fit(
+                np.vstack([H_tr, H_v_all]),
+                np.concatenate([y_tr, y_v_all]),
+                sample_weight=np.concatenate([w_head, w_v_all]),
+            )
+            W_lr = clf.coef_.T.astype(np.float32)
+            b_lr = clf.intercept_.astype(np.float32)
+            alpha = 0.65 if self.w_train is not None else 0.25
+            W_c = ((1.0 - alpha) * W_last + alpha * W_lr).astype(np.float32)
+            b_c = ((1.0 - alpha) * b_last + alpha * b_lr).astype(np.float32)
+
+            L_bg_clean = np.vstack(
+                [
+                    H_tr[(y_tr == 0) & (view_idx == 0)] @ W_c,
+                    H_val["clean"][self.val_slices["clean"][1] == 0] @ W_c,
+                ]
+            )
+            L_noisy_snore = np.vstack(
+                [
+                    H_tr[(y_tr == 2) & np.isin(view_idx, [3, 4])] @ W_c,
+                    H_val["appliance_noise_3db"][
+                        self.val_slices["appliance_noise_3db"][1] == 2
+                    ]
+                    @ W_c,
+                ]
+            )
+            L_val_clean_bg = H_val["clean"][self.val_slices["clean"][1] == 0] @ W_c
+
+            for vfpr_cap in (VAL_CALIB_TARGET_BG_FPR_PCT, VAL_SWA_MAX_BG_FPR_PCT):
+                matched = False
+                for db0 in np.linspace(0.0, 0.90, 37, dtype=np.float32):
+                    b_try = b_c.copy()
+                    b_try[0] += db0
+                    pfpr = float(
+                        np.mean(np.argmax(L_bg_clean + b_try, axis=-1) != 0) * 100.0
                     )
-                    valid0.append((key0, float(db0)))
-            if valid0:
-                best_key0 = max(v[0] for v in valid0)
-                if best_key0 > base_key0:
-                    plateau0 = [v[1] for v in valid0 if v[0] == best_key0]
-                    b_cur[0] = b_cur[0] + float(plateau0[len(plateau0) // 2])
-                    base_f1s, base_fprs, base_cls_n = eval_with_bias(b_cur)
+                    vfpr_c = float(
+                        np.mean(np.argmax(L_val_clean_bg + b_try, axis=-1) != 0)
+                        * 100.0
+                    )
+                    if pfpr <= 3.2 and vfpr_c <= vfpr_cap:
+                        b_c = b_try
+                        matched = True
+                        break
+                if matched:
+                    break
 
-        fpr_cap = max(VAL_CALIB_TARGET_BG_FPR_PCT, max(base_fprs.values()))
-        for c in range(1, NUM_CLASSES):
-            if base_cls_n[c] < 35.0:
-                validc = []
-                for dbc in np.linspace(0.05, 0.90, 18, dtype=np.float32):
-                    cand_b = b_cur.copy()
-                    cand_b[c] = b_cur[c] + dbc
-                    f1s, fprs, _ = eval_with_bias(cand_b)
-                    if (
-                        max(fprs.values()) <= fpr_cap
-                        and fprs["appliance_noise_3db"]
-                        <= base_fprs["appliance_noise_3db"]
-                        and fprs["pocket_occluded"] <= base_fprs["pocket_occluded"]
-                        and f1s["clean"] >= base_f1s["clean"] - 2.5
-                        and f1s["pocket_occluded"] >= base_f1s["pocket_occluded"] - 1.5
-                    ):
-                        validc.append((round(f1s["appliance_noise_3db"], 2), float(dbc)))
-                if validc:
-                    best_nf1 = max(v[0] for v in validc)
-                    if best_nf1 > round(base_f1s["appliance_noise_3db"], 2):
-                        plateauc = [v[1] for v in validc if v[0] == best_nf1]
-                        b_cur[c] = b_cur[c] + float(
-                            min(plateauc[-1], plateauc[0] + 0.30)
-                        )
-                        base_f1s, base_fprs, base_cls_n = eval_with_bias(b_cur)
+            sn_rec = float(
+                np.mean(np.argmax(L_noisy_snore + b_c, axis=-1) == 2) * 100.0
+            )
+            if sn_rec < 44.0:
+                for db2 in np.linspace(0.05, 0.70, 27, dtype=np.float32):
+                    b_try = b_c.copy()
+                    b_try[2] += db2
+                    pfpr = float(
+                        np.mean(np.argmax(L_bg_clean + b_try, axis=-1) != 0) * 100.0
+                    )
+                    vfpr_c = float(
+                        np.mean(np.argmax(L_val_clean_bg + b_try, axis=-1) != 0)
+                        * 100.0
+                    )
+                    sn_r = float(
+                        np.mean(np.argmax(L_noisy_snore + b_try, axis=-1) == 2)
+                        * 100.0
+                    )
+                    if pfpr <= 3.2 and vfpr_c <= VAL_SWA_MAX_BG_FPR_PCT and sn_r >= 44.0:
+                        b_c = b_try
+                        break
 
-        self.model.layers[-1].set_weights([W_last, b_cur.astype(np.float32)])
+            self.model.layers[-1].set_weights([W_c, b_c.astype(np.float32)])
+            return
+
+        self.model.layers[-1].set_weights([W_last, b_last.astype(np.float32)])
 
     def on_train_end(self, logs: dict | None = None) -> None:
         del logs
@@ -330,6 +373,9 @@ def _fit_candidate(
         val_slices=val_slices,
         total_epochs=epochs,
         calibrate_prior=use_empirical_prior,
+        X_train=X_train,
+        y_train=y_train,
+        w_train=w_noisy,
     )
     model.fit(
         X_train,

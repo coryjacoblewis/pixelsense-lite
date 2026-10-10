@@ -387,8 +387,12 @@ def test_tflite_subgraph_and_multiseed_release_gate() -> None:
 
     # Verify Seed-42 and 5-seed INT8 metrics satisfy release gates with cross-platform safety margins
     assert (
-        ablat_df.loc["v2_robust_augmented", "int8_eval_max_slice_bg_fpr_%"]
-        <= release_gate.MAX_BG_FPR_PCT
+        v2_eval["f1_appliance_noise_3db_%"] >= 58.0
+        and ablat_df.loc["v2_robust_augmented", "int8_f1_appliance_noise_3db_%"] >= 58.0
+    )
+    assert (
+        v2_eval["max_slice_bg_fpr_%"] <= 12.0
+        and ablat_df.loc["v2_robust_augmented", "int8_eval_max_slice_bg_fpr_%"] <= 12.0
     )
     assert (
         ablat_df.loc["v2_robust_augmented", "int8_eval_bg_fpr_5seed_mean_%"]
