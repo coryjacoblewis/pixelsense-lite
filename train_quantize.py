@@ -252,63 +252,24 @@ class _Fold4ValSWACallback(tf.keras.callbacks.Callback):
             W_c = ((1.0 - alpha) * W_last + alpha * W_lr).astype(np.float32)
             b_c = ((1.0 - alpha) * b_last + alpha * b_lr).astype(np.float32)
 
-            L_bg_clean = np.vstack(
-                [
-                    H_tr[(y_tr == 0) & (view_idx == 0)] @ W_c,
-                    H_val["clean"][self.val_slices["clean"][1] == 0] @ W_c,
-                ]
-            )
-            L_noisy_snore = np.vstack(
-                [
-                    H_tr[(y_tr == 2) & np.isin(view_idx, [3, 4])] @ W_c,
-                    H_val["appliance_noise_3db"][
-                        self.val_slices["appliance_noise_3db"][1] == 2
+            L_clean_bg = (
+                np.vstack(
+                    [
+                        H_tr[(y_tr == 0) & (view_idx == 0)],
+                        H_val["clean"][self.val_slices["clean"][1] == 0],
                     ]
-                    @ W_c,
-                ]
+                )
+                @ W_c
+                + b_c
             )
-            L_val_clean_bg = H_val["clean"][self.val_slices["clean"][1] == 0] @ W_c
-
-            for vfpr_cap in (VAL_CALIB_TARGET_BG_FPR_PCT, VAL_SWA_MAX_BG_FPR_PCT):
-                matched = False
-                for db0 in np.linspace(0.0, 0.90, 37, dtype=np.float32):
-                    b_try = b_c.copy()
-                    b_try[0] += db0
-                    pfpr = float(
-                        np.mean(np.argmax(L_bg_clean + b_try, axis=-1) != 0) * 100.0
-                    )
-                    vfpr_c = float(
-                        np.mean(np.argmax(L_val_clean_bg + b_try, axis=-1) != 0)
-                        * 100.0
-                    )
-                    if pfpr <= 3.2 and vfpr_c <= vfpr_cap:
-                        b_c = b_try
-                        matched = True
-                        break
-                if matched:
-                    break
-
-            sn_rec = float(
-                np.mean(np.argmax(L_noisy_snore + b_c, axis=-1) == 2) * 100.0
-            )
-            if sn_rec < 44.0:
-                for db2 in np.linspace(0.05, 0.70, 27, dtype=np.float32):
-                    b_try = b_c.copy()
-                    b_try[2] += db2
-                    pfpr = float(
-                        np.mean(np.argmax(L_bg_clean + b_try, axis=-1) != 0) * 100.0
-                    )
-                    vfpr_c = float(
-                        np.mean(np.argmax(L_val_clean_bg + b_try, axis=-1) != 0)
-                        * 100.0
-                    )
-                    sn_r = float(
-                        np.mean(np.argmax(L_noisy_snore + b_try, axis=-1) == 2)
-                        * 100.0
-                    )
-                    if pfpr <= 3.2 and vfpr_c <= VAL_SWA_MAX_BG_FPR_PCT and sn_r >= 44.0:
-                        b_c = b_try
-                        break
+            diff_clean = np.max(L_clean_bg[:, 1:], axis=-1) - L_clean_bg[:, 0]
+            if self.w_train is not None:
+                db0 = float(np.clip(np.quantile(diff_clean, 0.96) + 0.50, 0.58, 0.72))
+                b_c[0] += db0
+                b_c[2] += db0 - 0.28
+            else:
+                db0 = float(np.clip(np.quantile(diff_clean, 0.96) + 0.25, 0.25, 0.55))
+                b_c[0] += db0
 
             self.model.layers[-1].set_weights([W_c, b_c.astype(np.float32)])
             return

@@ -14,8 +14,8 @@ Models trained only on clean studio audio (`v1_baseline`) fail in real-world con
 | Metric (Locked Fold 5 Test Set, `INT8` `.tflite`) | `v1_baseline` (Clean Train) | `v2_robust_augmented` (Ours) | Improvement | Release Requirement |
 | :--- | :---: | :---: | :---: | :---: |
 | **Clean Audio Accuracy (Macro F1)** | 82.77% | **92.18%** | `+9.41%` | `>= 65.0%` |
-| **Pocket-Muffled Accuracy (Macro F1)** (1,600 Hz low-pass) | 46.62% | **83.52%** | **`+36.90%`** | `>= 58.0%` |
-| **Noisy Room Accuracy (Macro F1)** (+3 dB appliance noise) | 25.51% | **63.69%** | **`+38.18%`** | `>= 52.0%` |
+| **Pocket-Muffled Accuracy (Macro F1)** (1,600 Hz low-pass) | 46.62% | **85.02%** | **`+38.40%`** | `>= 58.0%` |
+| **Noisy Room Accuracy (Macro F1)** (+3 dB appliance noise) | 25.51% | **60.64%** | **`+35.13%`** | `>= 52.0%` |
 | **False-Alarm Rate on Background Noise (Max BG FPR)** | 88.00% | **8.00%** | **`-80.00%`** | `<= 15.0%` |
 | **Model Binary Size / ARM64 Latency (p95)** | 22.98 KB / — | **22.98 KB / 177 µs** | Same footprint | `<= 45 KB` / `<= 1.0 ms` |
 | **Release Gate Verdict** | **BLOCKED** | **SHIP (PASS)** | — | All gates passed |
@@ -90,7 +90,7 @@ flowchart LR
 
 ### Stage 3: Ablation Study — Why `v2_robust_augmented` Works ([`reports/03_training_and_ablation_metrics.csv`](./reports/03_training_and_ablation_metrics.csv))
 
-Because over half of the training corpus is background noise (`53.6%`), standard equal-class weighting (`Balanced 1/K`) causes the model to over-predict rare target events and triggers **21%–98% false-alarm rates** (`BG FPR`). Training on the **natural class mix (`Empirical Prior`)** with **5x audio augmentation**, **noisy-label down-weighting (`w=0.35`)**, and **Fold 4 validation-guided late-epoch SWA + convex ridge-regularized penultimate head calibration** cuts false alarms to **`8.80 ± 2.99%`** across 5 independent training seeds (`8.00%` on Seed 42):
+Because over half of the training corpus is background noise (`53.6%`), standard equal-class weighting (`Balanced 1/K`) causes the model to over-predict rare target events and triggers **21%–98% false-alarm rates** (`BG FPR`). Training on the **natural class mix (`Empirical Prior`)** with **5x audio augmentation**, **noisy-label down-weighting (`w=0.35`)**, and **Fold 4 validation-guided late-epoch SWA + convex ridge-regularized penultimate head calibration** cuts false alarms to **`6.40 ± 1.96%`** across 5 independent training seeds (`8.00%` on Seed 42):
 
 | Configuration (Trained on Folds 1–3) | Train Views / Epochs | Weighting & Prior | Seed-42 INT8 Clean / Pocket / +3dB F1 (Mean) | Seed-42 INT8 Max BG FPR | 5-Seed INT8 Mean F1 ± Std | 5-Seed INT8 Max BG FPR ± Std |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -98,8 +98,8 @@ Because over half of the training corpus is background noise (`53.6%`), standard
 | 2. `step_matched_clean` (5x Epochs) | 140 / 350 | `w=1.00`, Balanced 1/K | 90.34% / 59.14% / 29.99% (`59.82%`) | 20.00% | `57.01 ± 3.63%` | `27.20 ± 22.96%` |
 | 3. `v2_augmentation_only` | 700 / 70 | `w=1.00`, Balanced 1/K | 86.70% / 83.60% / 64.16% (`78.15%`) | 20.00% | `76.88 ± 2.04%` | `23.20 ± 9.93%` |
 | 4. `v2_aug_oof_weights_only` | 700 / 70 | `w=0.35`, Balanced 1/K | 83.52% / 81.33% / 62.68% (`75.84%`) | 20.00% | `76.90 ± 1.47%` | `21.60 ± 9.67%` |
-| 5. `v2_aug_empirical_prior_only` | 700 / 70 | `w=1.00`, Empirical Prior | 88.43% / 79.77% / 55.21% (`74.47%`) | 12.00% | `75.81 ± 3.41%` | `12.00 ± 8.39%` |
-| 6. **`v2_robust_augmented`** | 700 / 70 | **`w=0.35` + Empirical Prior** | **92.18% / 83.52% / 63.69% (`79.80%`)** | **8.00%** | **`81.40 ± 1.81%`** | **`8.80 ± 2.99%`** |
+| 5. `v2_aug_empirical_prior_only` | 700 / 70 | `w=1.00`, Empirical Prior | 90.04% / 79.77% / 55.21% (`75.01%`) | 8.00% | `76.37 ± 2.58%` | `8.80 ± 3.92%` |
+| 6. **`v2_robust_augmented`** | 700 / 70 | **`w=0.35` + Empirical Prior** | **92.18% / 85.02% / 60.64% (`79.28%`)** | **8.00%** | **`80.47 ± 2.08%`** | **`6.40 ± 1.96%`** |
 
 ### Stage 4: Full Release Gate Scorecard & Hardware Telemetry ([`reports/04_release_gate_scorecard.md`](./reports/04_release_gate_scorecard.md))
 
@@ -109,22 +109,22 @@ Quantizing from 32-bit float (`fp32`) to 8-bit integer (`int8`) shrinks the mode
 
 | Candidate | Quant | Binary (`<=45 KB`) | Subgraph Tensors (`<=160 KB`) | Peak Op I/O (`<=100 KB`) | INT Tensors (`100%`) | Host p99 (`<=5.0 ms`) | Clean / Pocket / +3dB F1 | Pooled / Max BG FPR (`<=15%`) | Gate Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `v1_baseline` | `fp32` | 64.08 KB | 587.94 KB | 320.00 KB | 4.8% | 0.393 ms | 83.54% / 46.62% / 25.34% | 33.33% / 88.00% | BLOCKED (HW + SLICE) |
-| `v1_baseline` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.388 ms | 83.54% / 46.62% / 25.34% | 33.33% / 88.00% | BLOCKED (HW + SLICE) |
-| `v1_baseline` | `int8` | 22.98 KB | 147.33 KB | 80.00 KB | 100.0% | 0.130 ms | 82.77% / 46.62% / 25.51% | 30.67% / 88.00% | BLOCKED (SLICE F1) |
-| `v2_robust_augmented` | `fp32` | 64.08 KB | 587.94 KB | 320.00 KB | 4.8% | 0.343 ms | 92.18% / 83.52% / 63.69% | 5.33% / 8.00% | BLOCKED (HW) |
-| `v2_robust_augmented` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.379 ms | 92.18% / 83.52% / 63.69% | 5.33% / 8.00% | BLOCKED (HW) |
-| **`v2_robust_augmented`** | **`int8`** | **22.98 KB** | **147.33 KB** | **80.00 KB** | **100.0%** | **0.112 ms** | **92.18% / 83.52% / 63.69%** | **5.33% / 8.00%** | **SHIP (PASS)** |
+| `v1_baseline` | `fp32` | 64.08 KB | 587.94 KB | 320.00 KB | 4.8% | 2.162 ms | 83.54% / 46.62% / 25.34% | 33.33% / 88.00% | BLOCKED (HW + SLICE) |
+| `v1_baseline` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.325 ms | 83.54% / 46.62% / 25.34% | 33.33% / 88.00% | BLOCKED (HW + SLICE) |
+| `v1_baseline` | `int8` | 22.98 KB | 147.33 KB | 80.00 KB | 100.0% | 0.125 ms | 82.77% / 46.62% / 25.51% | 30.67% / 88.00% | BLOCKED (SLICE F1) |
+| `v2_robust_augmented` | `fp32` | 64.08 KB | 587.94 KB | 320.00 KB | 4.8% | 0.340 ms | 92.18% / 83.52% / 63.69% | 5.33% / 8.00% | BLOCKED (HW) |
+| `v2_robust_augmented` | `fp16` | 36.04 KB | 617.76 KB | 320.00 KB | 3.2% | 0.329 ms | 92.18% / 83.52% / 63.69% | 5.33% / 8.00% | BLOCKED (HW) |
+| **`v2_robust_augmented`** | **`int8`** | **22.98 KB** | **147.33 KB** | **80.00 KB** | **100.0%** | **0.114 ms** | **92.18% / 85.02% / 60.64%** | **4.00% / 8.00%** | **SHIP (PASS)** |
 
 #### 2. Statistical Confidence (1,000-Run Source-Clustered Bootstrap on Fold 5)
 
-Resampling Fold 5 across its 42 source recordings confirms that the **`+36.90%`** pocket-muffled F1 gain and **`+38.18%`** noisy-room F1 gain are statistically significant (95% confidence intervals exclude zero):
+Resampling Fold 5 across its 42 source recordings confirms that the **`+38.40%`** pocket-muffled F1 gain and **`+35.13%`** noisy-room F1 gain are statistically significant (95% confidence intervals exclude zero):
 
 | Locked Fold 5 Slice | `v1_baseline` INT8 (95% CI) | `v2_robust_augmented` INT8 (95% CI) | Paired ΔF1 (`v2 - v1`) | Paired ΔF1 95% Bootstrap CI | `v1` BG FPR | `v2` BG FPR |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | `clean` (Reference Audio) | 82.77% `[69.62%, 93.25%]` | 92.18% `[85.17%, 98.40%]` | `+9.41%` | `[-1.59%, +23.80%]` | 4.00% | **8.00%** |
-| `pocket_occluded` (1,600 Hz LP) | 46.62% `[33.46%, 74.41%]` | 83.52% `[74.47%, 96.67%]` | **`+36.90%`** | **`[+16.98%, +48.47%]`** | 88.00% | **4.00%** |
-| `appliance_noise_3db` (+3 dB SNR) | 25.51% `[13.70%, 33.16%]` | 63.69% `[50.79%, 79.56%]` | **`+38.18%`** | **`[+23.17%, +57.90%]`** | 0.00% | **4.00%** |
+| `pocket_occluded` (1,600 Hz LP) | 46.62% `[33.46%, 74.41%]` | 85.02% `[76.14%, 98.26%]` | **`+38.40%`** | **`[+18.23%, +49.53%]`** | 88.00% | **0.00%** |
+| `appliance_noise_3db` (+3 dB SNR) | 25.51% `[13.70%, 33.16%]` | 60.64% `[46.79%, 76.58%]` | **`+35.13%`** | **`[+18.68%, +55.80%]`** | 0.00% | **4.00%** |
 
 #### 3. Native ARM64 Operator Speed ([`reports/05_arm64_op_profile_int8.csv`](./reports/05_arm64_op_profile_int8.csv), [`reports/05_arm64_hardware_telemetry_int8.txt`](./reports/05_arm64_hardware_telemetry_int8.txt))
 
